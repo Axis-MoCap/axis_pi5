@@ -6,33 +6,93 @@ import argparse
 import subprocess
 import json
 import os
+import glob
 
 def detect_raspberry_pi5_camera():
     """
     Detect cameras using the Raspberry Pi 5 camera interface (libcamera)
     """
     try:
-        # Run the libcamera-hello command to check for cameras
-        result = subprocess.run(['libcamera-hello', '--list-cameras'], 
-                               stdout=subprocess.PIPE, 
-                               stderr=subprocess.PIPE,
-                               text=True)
+        # Print debug info
+        print("DEBUG: Checking for Raspberry Pi 5 camera...", file=sys.stderr)
         
-        if "Available cameras" in result.stdout or "Available cameras" in result.stderr:
-            # Extract camera information
-            for line in (result.stdout + result.stderr).split('\n'):
-                if "Available cameras" in line or "* " in line:
-                    # Found a camera, usually identified with format: * 0: Camera_Name
-                    if line.strip().startswith('*'):
-                        camera_id = line.split(':')[0].strip('* ')
-                        print(f"CAMERA_FOUND:/dev/video{camera_id}")
-                        return True
-        
-        # Try direct device detection if libcamera-hello approach fails
-        if os.path.exists('/dev/video0'):
-            print("CAMERA_FOUND:/dev/video0")
+        # First try direct device detection which is most reliable
+        video_devices = glob.glob('/dev/video*')
+        if video_devices:
+            print(f"DEBUG: Found video devices: {video_devices}", file=sys.stderr)
+            # For Pi 5, typically camera is on /dev/video0
+            if '/dev/video0' in video_devices:
+                print("CAMERA_FOUND:/dev/video0")
+                return True
+            # Return first available device if video0 not found
+            print(f"CAMERA_FOUND:{video_devices[0]}")
             return True
+        
+        # Try using libcamera-hello if available
+        try:
+            print("DEBUG: Trying libcamera-hello...", file=sys.stderr)
+            result = subprocess.run(['libcamera-hello', '--list-cameras'], 
+                                stdout=subprocess.PIPE, 
+                                stderr=subprocess.PIPE,
+                                text=True,
+                                timeout=3)
             
+            output = result.stdout + result.stderr
+            print(f"DEBUG: libcamera-hello output: {output}", file=sys.stderr)
+            
+            if "Available cameras" in output:
+                # Extract camera information
+                for line in output.split('\n'):
+                    if "* " in line:
+                        # Found a camera, usually identified with format: * 0: Camera_Name
+                        if line.strip().startswith('*'):
+                            camera_id = line.split(':')[0].strip('* ')
+                            print(f"CAMERA_FOUND:/dev/video{camera_id}")
+                            return True
+            
+        except (subprocess.SubprocessError, FileNotFoundError) as e:
+            print(f"DEBUG: libcamera-hello failed: {e}", file=sys.stderr)
+        
+        # Try using libcamera-still as another option
+        try:
+            print("DEBUG: Trying libcamera-still...", file=sys.stderr)
+            result = subprocess.run(['libcamera-still', '--list-cameras'], 
+                                   stdout=subprocess.PIPE, 
+                                   stderr=subprocess.PIPE,
+                                   text=True,
+                                   timeout=3)
+            
+            output = result.stdout + result.stderr
+            print(f"DEBUG: libcamera-still output: {output}", file=sys.stderr)
+            
+            if "Available cameras" in output:
+                print("CAMERA_FOUND:/dev/video0")
+                return True
+        except (subprocess.SubprocessError, FileNotFoundError) as e:
+            print(f"DEBUG: libcamera-still failed: {e}", file=sys.stderr)
+        
+        # Last resort, check v4l2 devices
+        try:
+            print("DEBUG: Trying v4l2-ctl...", file=sys.stderr)
+            result = subprocess.run(['v4l2-ctl', '--list-devices'], 
+                                   stdout=subprocess.PIPE, 
+                                   stderr=subprocess.PIPE,
+                                   text=True,
+                                   timeout=3)
+            
+            print(f"DEBUG: v4l2-ctl output: {result.stdout}", file=sys.stderr)
+            
+            if result.stdout.strip():
+                # Just grab the first video device
+                for line in result.stdout.split('\n'):
+                    if '/dev/video' in line:
+                        device = line.strip()
+                        print(f"CAMERA_FOUND:{device}")
+                        return True
+        except (subprocess.SubprocessError, FileNotFoundError) as e:
+            print(f"DEBUG: v4l2-ctl failed: {e}", file=sys.stderr)
+            
+        print("DEBUG: No Raspberry Pi 5 camera found", file=sys.stderr)
         return False
     except Exception as e:
         print(f"Error detecting Raspberry Pi 5 camera: {e}", file=sys.stderr)

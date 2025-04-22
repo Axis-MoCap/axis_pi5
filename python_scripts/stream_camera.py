@@ -12,6 +12,7 @@ from threading import Thread
 import numpy as np
 import queue
 import signal
+import glob
 
 # Global flag to control the streaming loop
 running = True
@@ -35,19 +36,64 @@ class RaspberryPi5Camera:
         self.fps = fps
         self.process = None
         self.frame_queue = queue.Queue(maxsize=2)  # Limit queue size to prevent memory issues
+        self.mode = 'libcamera-vid'  # Default mode
         
     def start(self):
         try:
-            # Use libcamera-vid for streaming
-            cmd = [
-                'libcamera-vid',
-                '--camera', '0',  # Use camera index 0 by default
-                '--width', str(self.width),
-                '--height', str(self.height),
-                '--framerate', str(self.fps),
-                '--codec', 'mjpeg',  # Use MJPEG for better performance
-                '--output', '-'  # Stream to stdout
-            ]
+            print(f"DEBUG: Starting Raspberry Pi 5 camera at {self.camera_path}", file=sys.stderr)
+            print(f"DEBUG: Width: {self.width}, Height: {self.height}, FPS: {self.fps}", file=sys.stderr)
+            
+            # Check camera path exists
+            if not os.path.exists(self.camera_path):
+                print(f"DEBUG: Camera path {self.camera_path} does not exist", file=sys.stderr)
+                # Try to find an alternative video device
+                video_devices = glob.glob('/dev/video*')
+                if video_devices:
+                    self.camera_path = video_devices[0]
+                    print(f"DEBUG: Using alternative camera: {self.camera_path}", file=sys.stderr)
+                else:
+                    print("DEBUG: No video devices found", file=sys.stderr)
+                    return False
+            
+            # Try to determine the best available method
+            if self._check_command_exists('libcamera-vid'):
+                self.mode = 'libcamera-vid'
+            elif self._check_command_exists('ffmpeg'):
+                self.mode = 'ffmpeg'
+            else:
+                print("DEBUG: Neither libcamera-vid nor ffmpeg are available", file=sys.stderr)
+                return False
+                
+            print(f"DEBUG: Using {self.mode} mode", file=sys.stderr)
+            
+            if self.mode == 'libcamera-vid':
+                # Use libcamera-vid for streaming
+                cmd = [
+                    'libcamera-vid',
+                    '--camera', '0',  # Use camera index 0 by default
+                    '--width', str(self.width),
+                    '--height', str(self.height),
+                    '--framerate', str(self.fps),
+                    '--codec', 'mjpeg',  # Use MJPEG for better performance
+                    '--output', '-',  # Stream to stdout
+                    '--verbose', # Add verbose output for debugging
+                ]
+            else:  # ffmpeg mode
+                # Use ffmpeg as fallback
+                cmd = [
+                    'ffmpeg',
+                    '-f', 'v4l2',
+                    '-input_format', 'mjpeg',  # Try MJPEG format first
+                    '-video_size', f"{self.width}x{self.height}",
+                    '-framerate', str(self.fps),
+                    '-i', self.camera_path,
+                    '-f', 'image2pipe',
+                    '-vcodec', 'mjpeg',
+                    '-q:v', '3',  # Better quality (lower is better quality in ffmpeg)
+                    '-'
+                ]
+            
+            print(f"DEBUG: Running command: {' '.join(cmd)}", file=sys.stderr)
             
             # Start the process
             self.process = subprocess.Popen(
@@ -62,10 +108,42 @@ class RaspberryPi5Camera:
             self.thread.daemon = True
             self.thread.start()
             
+            # Start a thread to monitor stderr for debugging
+            self.error_thread = Thread(target=self._monitor_stderr)
+            self.error_thread.daemon = True
+            self.error_thread.start()
+            
+            # Give it a moment to start up and check if it's running
+            time.sleep(1)
+            if self.process.poll() is not None:
+                print(f"DEBUG: Process exited with code {self.process.poll()}", file=sys.stderr)
+                return False
+                
             return True
         except Exception as e:
             print(f"Error starting Raspberry Pi 5 camera: {e}", file=sys.stderr)
             return False
+            
+    def _check_command_exists(self, command):
+        """Check if a command exists on the system"""
+        try:
+            subprocess.run(['which', command], 
+                          stdout=subprocess.PIPE, 
+                          stderr=subprocess.PIPE,
+                          check=True)
+            return True
+        except subprocess.SubprocessError:
+            return False
+            
+    def _monitor_stderr(self):
+        """Monitor stderr for debugging info"""
+        try:
+            while running and self.process and self.process.poll() is None:
+                line = self.process.stderr.readline()
+                if line:
+                    print(f"DEBUG: Camera stderr: {line.decode('utf-8', errors='replace').strip()}", file=sys.stderr)
+        except Exception as e:
+            print(f"Error in stderr monitor: {e}", file=sys.stderr)
     
     def _read_frames(self):
         # This function runs in a separate thread
@@ -74,10 +152,15 @@ class RaspberryPi5Camera:
             buffer = io.BytesIO()
             start_marker_found = False
             
+            print("DEBUG: Starting frame reading thread", file=sys.stderr)
+            frame_count = 0
+            last_report_time = time.time()
+            
             while running and self.process.poll() is None:
                 data = self.process.stdout.read(4096)  # Read in chunks
                 
                 if not data:
+                    print("DEBUG: End of stream reached", file=sys.stderr)
                     break
                 
                 # Look for JPEG markers in the data
@@ -100,6 +183,14 @@ class RaspberryPi5Camera:
                             if not self.frame_queue.full():
                                 b64_frame = base64.b64encode(jpeg_data).decode('utf-8')
                                 self.frame_queue.put(b64_frame, block=False)
+                                frame_count += 1
+                                
+                                # Report frames processed every 5 seconds
+                                current_time = time.time()
+                                if current_time - last_report_time >= 5:
+                                    print(f"DEBUG: Processed {frame_count} frames in last {current_time - last_report_time:.1f} seconds", file=sys.stderr)
+                                    frame_count = 0
+                                    last_report_time = current_time
                         except queue.Full:
                             pass  # Skip frame if queue is full
                             
@@ -115,6 +206,7 @@ class RaspberryPi5Camera:
             print(f"Error in frame reading thread: {e}", file=sys.stderr)
         finally:
             if self.process:
+                print("DEBUG: Frame reading thread terminated", file=sys.stderr)
                 self.process.terminate()
     
     def get_frame(self):
@@ -135,6 +227,10 @@ class RaspberryPi5Camera:
         # Wait for reading thread to finish
         if hasattr(self, 'thread') and self.thread.is_alive():
             self.thread.join(timeout=1.0)
+        
+        # Wait for error thread to finish
+        if hasattr(self, 'error_thread') and self.error_thread.is_alive():
+            self.error_thread.join(timeout=1.0)
 
 class RaspberryPiCamera:
     """Camera interface for Raspberry Pi (legacy)"""
@@ -367,6 +463,10 @@ def main():
     
     args = parser.parse_args()
     
+    # Print starting message
+    print(f"DEBUG: Starting camera stream of type {args.type} from {args.camera_path}", file=sys.stderr)
+    print(f"DEBUG: Resolution: {args.width}x{args.height} @ {args.fps} fps", file=sys.stderr)
+    
     # Create camera object based on type
     if args.type == 'raspberry5':
         camera = RaspberryPi5Camera(args.camera_path, args.width, args.height, args.fps)
@@ -388,10 +488,17 @@ def main():
         frame_count = 0
         last_time = time.time()
         
+        print("DEBUG: Entering main streaming loop", file=sys.stderr)
+        
         while running:
             frame = camera.get_frame()
             
             if frame:
+                # Check frame size
+                frame_size = len(frame)
+                if frame_count == 0:
+                    print(f"DEBUG: First frame size: {frame_size} bytes", file=sys.stderr)
+                    
                 # Print frame data in format that Flutter app expects
                 print(f"FRAME:{frame}")
                 sys.stdout.flush()  # Ensure data is sent immediately
@@ -405,6 +512,12 @@ def main():
                     fps = frame_count / elapsed
                     print(f"FPS: {fps:.2f}", file=sys.stderr)
                     frame_count = 0
+                    last_time = current_time
+            else:
+                # No frame received
+                current_time = time.time()
+                if current_time - last_time >= 5.0 and frame_count == 0:
+                    print("DEBUG: No frames received in the last 5 seconds", file=sys.stderr)
                     last_time = current_time
             
             # Small sleep to avoid maxing out CPU

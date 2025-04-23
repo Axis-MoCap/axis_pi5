@@ -1040,6 +1040,15 @@ class _MocapHomePageState extends State<MocapHomePage>
                               const SizedBox(width: 8),
                               Expanded(
                                 child: _buildCaptureInfoCard(
+                                  title: 'Picture quality',
+                                  value: '86%',
+                                  icon: Icons.hd,
+                                  color: Colors.yellow.shade400,
+                                ),
+                              ),
+                              const SizedBox(width: 8),
+                              Expanded(
+                                child: _buildCaptureInfoCard(
                                   title: 'Duration',
                                   value: _isRecording
                                       ? formattedDuration
@@ -1052,21 +1061,6 @@ class _MocapHomePageState extends State<MocapHomePage>
                           ),
 
                           const SizedBox(height: 12),
-
-                          // Motion quality indicators
-                          _buildCaptureStat(
-                              'Sensor Quality', 0.85, Colors.greenAccent,
-                              icon: Icons.sensors),
-                          const SizedBox(height: 4),
-                          _buildCaptureStat(
-                              'Battery', 0.64, Colors.orangeAccent,
-                              icon: Icons.battery_4_bar),
-                          const SizedBox(height: 4),
-                          _buildCaptureStat(
-                              'Connection', 0.92, Colors.blueAccent,
-                              icon: Icons.wifi),
-
-                          const SizedBox(height: 16),
 
                           // Capture controls
                           Row(
@@ -1922,7 +1916,8 @@ class _CameraFeedViewState extends State<CameraFeedView> {
       _initializeCamera();
     } else {
       setState(() {
-        _errorMessage = 'Maximum reconnection attempts reached. Please check your camera connection and restart the app.';
+        _errorMessage =
+            'Maximum reconnection attempts reached. Please check your camera connection and restart the app.';
       });
     }
   }
@@ -1954,9 +1949,11 @@ class _CameraFeedViewState extends State<CameraFeedView> {
               mainAxisAlignment: MainAxisAlignment.center,
               children: [
                 Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
                   decoration: BoxDecoration(
-                    color: Theme.of(context).colorScheme.primary.withOpacity(0.2),
+                    color:
+                        Theme.of(context).colorScheme.primary.withOpacity(0.2),
                     borderRadius: BorderRadius.circular(16),
                   ),
                   child: Text(
@@ -2163,7 +2160,8 @@ class _CameraFeedViewState extends State<CameraFeedView> {
               child: Column(
                 mainAxisAlignment: MainAxisAlignment.center,
                 children: [
-                  const Icon(Icons.warning_amber_rounded, color: Colors.amber, size: 48),
+                  const Icon(Icons.warning_amber_rounded,
+                      color: Colors.amber, size: 48),
                   const SizedBox(height: 8),
                   Text(
                     'Stream Error: ${snapshot.error}',
@@ -2189,7 +2187,8 @@ class _CameraFeedViewState extends State<CameraFeedView> {
                     color: Theme.of(context).colorScheme.primary,
                   ),
                   const SizedBox(height: 8),
-                  const Text('Waiting for video...', style: TextStyle(color: Colors.white70)),
+                  const Text('Waiting for video...',
+                      style: TextStyle(color: Colors.white70)),
                 ],
               ),
             );

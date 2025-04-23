@@ -10,6 +10,9 @@ import 'camera_service.dart';
 import 'authentication/register_page.dart';
 import 'authentication/login_page.dart';
 import 'pages/on_boarding.dart';
+import 'dart:typed_data';
+import 'package:path/path.dart' as path;
+import 'dart:ui' as ui;
 
 void main() {
   runApp(const AxisMocapApp());
@@ -932,10 +935,7 @@ class _MocapHomePageState extends State<MocapHomePage>
                                 // Front camera
                                 AspectRatio(
                                   aspectRatio: 4 / 3,
-                                  child: CameraFeedView(
-                                    title: 'Camera View',
-                                    isRecording: _isRecording,
-                                  ),
+                                  child: CameraFeedView(),
                                 ),
                                 const SizedBox(height: 16),
                                 // Side camera
@@ -956,10 +956,7 @@ class _MocapHomePageState extends State<MocapHomePage>
                                 children: [
                                   // Front camera
                                   Expanded(
-                                    child: CameraFeedView(
-                                      title: 'Camera View',
-                                      isRecording: _isRecording,
-                                    ),
+                                    child: CameraFeedView(),
                                   ),
                                   const SizedBox(width: 16),
                                   // Side view
@@ -1817,395 +1814,189 @@ class _MocapHomePageState extends State<MocapHomePage>
 
 // Camera feed widget
 class CameraFeedView extends StatefulWidget {
-  final String title;
-  final bool isRecording;
-
-  const CameraFeedView({
-    Key? key,
-    required this.title,
-    this.isRecording = false,
-  }) : super(key: key);
+  const CameraFeedView({Key? key}) : super(key: key);
 
   @override
   State<CameraFeedView> createState() => _CameraFeedViewState();
 }
 
 class _CameraFeedViewState extends State<CameraFeedView> {
-  late CameraService _cameraService;
-  CameraType _cameraType = CameraType.none;
+  final CameraService _cameraService = CameraService();
   Stream<Image>? _cameraStream;
-  StreamSubscription? _cameraStatusSubscription;
-  bool _isInitialized = false;
-  bool _isAttemptingConnection = false;
+  bool _isConnecting = true;
   String _errorMessage = '';
   int _reconnectAttempts = 0;
   final int _maxReconnectAttempts = 3;
   Timer? _reconnectTimer;
+  bool _isRecording = false;
+  String? _lastRecordingPath;
+  String? _lastProcessedFilePath;
 
   @override
   void initState() {
     super.initState();
-    _cameraService = CameraService();
     _initializeCamera();
-  }
-
-  Future<void> _initializeCamera() async {
-    setState(() {
-      _isAttemptingConnection = true;
-      _errorMessage = '';
-    });
-
-    // Listen for camera status changes
-    _cameraStatusSubscription =
-        _cameraService.cameraStatusStream.listen((status) {
-      setState(() {
-        _cameraType = status;
-      });
-    });
-
-    // Initial camera status
-    _cameraType = _cameraService.cameraType;
-
-    // Start camera stream if available
-    if (_cameraType != CameraType.none) {
-      try {
-        _cameraStream = await _cameraService.startCameraStream();
-        setState(() {
-          _isInitialized = true;
-          _isAttemptingConnection = false;
-          _reconnectAttempts = 0;
-        });
-      } catch (e) {
-        setState(() {
-          _errorMessage = 'Failed to start camera stream: $e';
-          _isAttemptingConnection = false;
-        });
-        debugPrint(_errorMessage);
-      }
-    } else {
-      // Try to detect camera
-      try {
-        final detectedType = await _cameraService.detectCamera();
-        setState(() {
-          _cameraType = detectedType;
-        });
-
-        if (_cameraType != CameraType.none) {
-          _cameraStream = await _cameraService.startCameraStream();
-          setState(() {
-            _isInitialized = true;
-            _isAttemptingConnection = false;
-            _reconnectAttempts = 0;
-          });
-        } else {
-          setState(() {
-            _errorMessage = 'No camera detected';
-            _isAttemptingConnection = false;
-          });
-        }
-      } catch (e) {
-        setState(() {
-          _errorMessage = 'Error detecting camera: $e';
-          _isAttemptingConnection = false;
-        });
-        debugPrint(_errorMessage);
-      }
-    }
-  }
-
-  void _retryConnection() {
-    if (_reconnectAttempts < _maxReconnectAttempts) {
-      setState(() {
-        _reconnectAttempts++;
-        _errorMessage = '';
-      });
-      _initializeCamera();
-    } else {
-      setState(() {
-        _errorMessage =
-            'Maximum reconnection attempts reached. Please check your camera connection and restart the app.';
-      });
-    }
   }
 
   @override
   void dispose() {
-    _cameraStatusSubscription?.cancel();
-    _cameraService.stopCameraStream();
     _reconnectTimer?.cancel();
     super.dispose();
   }
 
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      decoration: BoxDecoration(
-        color: Colors.black54,
-        borderRadius: BorderRadius.circular(8),
-        border: Border.all(
-          color: widget.isRecording ? Colors.redAccent : Colors.grey.shade800,
-          width: 1,
-        ),
-      ),
-      child: Column(
-        children: [
-          // Camera title with debug button
-          Padding(
-            padding: const EdgeInsets.symmetric(vertical: 8.0),
-            child: Row(
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: [
-                Container(
-                  padding:
-                      const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
-                  decoration: BoxDecoration(
-                    color:
-                        Theme.of(context).colorScheme.primary.withOpacity(0.2),
-                    borderRadius: BorderRadius.circular(16),
-                  ),
-                  child: Text(
-                    widget.title,
-                    style: const TextStyle(
-                      fontWeight: FontWeight.bold,
-                      fontSize: 12,
-                    ),
-                  ),
-                ),
-                const SizedBox(width: 8),
-                // Debug info button
-                InkWell(
-                  onTap: () => _showCameraDebugInfo(context),
-                  child: Container(
-                    padding: const EdgeInsets.all(4),
-                    decoration: BoxDecoration(
-                      color: Colors.grey.shade800,
-                      shape: BoxShape.circle,
-                    ),
-                    child: const Icon(Icons.info_outline, size: 12),
-                  ),
-                ),
-              ],
-            ),
-          ),
+  void _initializeCamera() async {
+    setState(() {
+      _isConnecting = true;
+      _errorMessage = '';
+    });
+    try {
+      _cameraStream = await _cameraService.startCameraStream();
+      if (_cameraStream != null) {
+        _reconnectAttempts = 0;
 
-          // Camera content
-          Expanded(
-            child: Container(
-              margin: const EdgeInsets.all(4),
-              decoration: BoxDecoration(
-                color: Colors.black38,
-                borderRadius: BorderRadius.circular(4),
-              ),
-              child: FittedBox(
-                fit: BoxFit.contain,
-                child: SizedBox(
-                  width: 300, // Base reference width
-                  height: 225, // Base reference height (4:3 aspect ratio)
-                  child: _buildCameraContent(),
-                ),
-              ),
-            ),
-          ),
-
-          // Camera type indicator at the bottom
-          if (_cameraType != CameraType.none)
-            Padding(
-              padding: const EdgeInsets.only(bottom: 4),
-              child: Text(
-                _getCameraTypeText(),
-                style: TextStyle(
-                  fontSize: 10,
-                  color: Colors.grey.shade400,
-                ),
-              ),
-            ),
-        ],
-      ),
-    );
-  }
-
-  String _getCameraTypeText() {
-    switch (_cameraType) {
-      case CameraType.raspberryPi5:
-        return 'Raspberry Pi 5 Camera';
-      case CameraType.raspberryPi:
-        return 'Raspberry Pi Camera';
-      case CameraType.webCamera:
-        return 'Webcam';
-      default:
-        return 'Unknown Camera';
+        setState(() {
+          _isConnecting = false;
+        });
+      } else {
+        throw Exception("Failed to initialize camera");
+      }
+    } catch (e) {
+      setState(() {
+        _isConnecting = false;
+        _errorMessage = 'Failed to initialize camera: $e';
+      });
     }
   }
 
-  void _showCameraDebugInfo(BuildContext context) {
-    showDialog(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('Camera Debug Info'),
-        content: SingleChildScrollView(
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Text('Camera Type: ${_getCameraTypeText()}'),
-              Text('Initialized: ${_isInitialized ? 'Yes' : 'No'}'),
-              Text('Stream Active: ${_cameraStream != null ? 'Yes' : 'No'}'),
-              if (_errorMessage.isNotEmpty)
-                Padding(
-                  padding: const EdgeInsets.only(top: 8.0),
-                  child: Text(
-                    'Error: $_errorMessage',
-                    style: const TextStyle(color: Colors.red),
-                  ),
-                ),
-              const SizedBox(height: 16),
-              const Text(
-                'Troubleshooting:',
-                style: TextStyle(fontWeight: FontWeight.bold),
-              ),
-              const Text('1. Make sure the camera is properly connected.'),
-              const Text('2. Check if camera modules are loaded.'),
-              const Text('3. Run "ls -l /dev/video*" to check video devices.'),
-              const Text('4. Check permissions for video devices.'),
-              const Text('5. Install v4l-utils and libcamera-apps packages.'),
-            ],
-          ),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () {
-              Navigator.of(context).pop();
-              _retryConnection();
-            },
-            child: const Text('Retry Connection'),
-          ),
-          TextButton(
-            onPressed: () => Navigator.of(context).pop(),
-            child: const Text('Close'),
-          ),
-        ],
-      ),
-    );
+  void _toggleRecording() async {
+    if (_isRecording) {
+      // Stop recording
+      setState(() {
+        _isRecording = false;
+      });
+
+      // TODO: Implement stopRecording in CameraService
+      // final recordingInfo = await _cameraService.stopRecording();
+      // if (recordingInfo != null) {
+      //   setState(() {
+      //     _lastRecordingPath = recordingInfo.videoPath;
+      //     _lastProcessedFilePath = recordingInfo.processedDataPath;
+      //   });
+      // }
+    } else {
+      // Start recording
+      setState(() {
+        _isRecording = true;
+      });
+
+      // TODO: Implement startRecording in CameraService
+      // await _cameraService.startRecording();
+    }
   }
 
-  Widget _buildCameraContent() {
-    if (_isAttemptingConnection) {
+  @override
+  Widget build(BuildContext context) {
+    if (_isConnecting) {
+      return const Center(child: CircularProgressIndicator());
+    }
+
+    if (_errorMessage.isNotEmpty) {
       return Center(
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            CircularProgressIndicator(
-              color: Theme.of(context).colorScheme.primary,
-            ),
-            const SizedBox(height: 16),
-            const Text(
-              'Connecting to Camera...',
-              style: TextStyle(color: Colors.white70),
-            ),
-          ],
-        ),
-      );
-    } else if (_errorMessage.isNotEmpty) {
-      return Center(
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            const Icon(Icons.error_outline, size: 48, color: Colors.orange),
-            const SizedBox(height: 16),
-            Text(
-              'Camera Error',
-              style: TextStyle(
-                color: Colors.orange.shade300,
-                fontSize: 16,
-                fontWeight: FontWeight.bold,
-              ),
-            ),
-            const SizedBox(height: 8),
-            Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 16.0),
-              child: Text(
-                _errorMessage,
-                style: const TextStyle(color: Colors.white70, fontSize: 12),
-                textAlign: TextAlign.center,
-              ),
-            ),
+            Text(_errorMessage, textAlign: TextAlign.center),
             const SizedBox(height: 16),
             ElevatedButton(
-              onPressed: _retryConnection,
+              onPressed: _initializeCamera,
               child: const Text('Retry'),
             ),
           ],
         ),
       );
-    } else if (_cameraType == CameraType.none) {
-      // No camera detected
-      return const CameraNotFound();
-    } else if (!_isInitialized || _cameraStream == null) {
-      // Camera detected but stream not yet initialized
-      return Center(
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            CircularProgressIndicator(
-              color: Theme.of(context).colorScheme.primary,
-            ),
-            const SizedBox(height: 16),
-            const Text(
-              'Initializing Camera...',
-              style: TextStyle(color: Colors.white70),
-            ),
-          ],
-        ),
-      );
-    } else {
-      // Camera stream available, show the feed
-      return StreamBuilder<Image>(
-        stream: _cameraStream,
-        builder: (context, snapshot) {
-          if (snapshot.hasError) {
-            return Center(
-              child: Column(
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: [
-                  const Icon(Icons.warning_amber_rounded,
-                      color: Colors.amber, size: 48),
-                  const SizedBox(height: 8),
-                  Text(
-                    'Stream Error: ${snapshot.error}',
-                    style: const TextStyle(color: Colors.red, fontSize: 12),
-                    textAlign: TextAlign.center,
-                  ),
-                  const SizedBox(height: 8),
-                  ElevatedButton(
-                    onPressed: _retryConnection,
-                    child: const Text('Reconnect'),
-                  ),
-                ],
-              ),
-            );
-          }
-
-          if (!snapshot.hasData) {
-            return Center(
-              child: Column(
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: [
-                  CircularProgressIndicator(
-                    color: Theme.of(context).colorScheme.primary,
-                  ),
-                  const SizedBox(height: 8),
-                  const Text('Waiting for video...',
-                      style: TextStyle(color: Colors.white70)),
-                ],
-              ),
-            );
-          }
-
-          // Display the camera frame
-          return snapshot.data!;
-        },
-      );
     }
+
+    return Column(
+      children: [
+        // Camera feed - takes most of the space
+        Expanded(
+          child: Container(
+            decoration: BoxDecoration(
+              border: Border.all(
+                color: _isRecording ? Colors.red : Colors.grey.shade800,
+                width: 1,
+              ),
+              borderRadius: BorderRadius.circular(8),
+            ),
+            child: ClipRRect(
+              borderRadius: BorderRadius.circular(7),
+              child: StreamBuilder<Image>(
+                stream: _cameraStream,
+                builder: (context, snapshot) {
+                  if (snapshot.hasError) {
+                    return Center(child: Text('Error: ${snapshot.error}'));
+                  }
+
+                  if (!snapshot.hasData) {
+                    return const Center(child: CircularProgressIndicator());
+                  }
+
+                  // Display the image widget directly
+                  return snapshot.data!;
+                },
+              ),
+            ),
+          ),
+        ),
+
+        // Controls
+        Padding(
+          padding: const EdgeInsets.only(top: 16.0, bottom: 16.0),
+          child: Row(
+            mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+            children: [
+              // Record Button
+              ElevatedButton.icon(
+                onPressed: _toggleRecording,
+                icon:
+                    Icon(_isRecording ? Icons.stop : Icons.fiber_manual_record),
+                label: Text(_isRecording ? 'Stop' : 'Record'),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: _isRecording ? Colors.red : Colors.green,
+                  foregroundColor: Colors.white,
+                ),
+              ),
+
+              // Retry Button
+              ElevatedButton.icon(
+                onPressed: _initializeCamera,
+                icon: const Icon(Icons.refresh),
+                label: const Text('Retry'),
+              ),
+            ],
+          ),
+        ),
+
+        // Recording Info
+        if (_lastRecordingPath != null)
+          Padding(
+            padding: const EdgeInsets.only(top: 8.0, bottom: 4.0),
+            child: Text(
+              'Last Recording: ${path.basename(_lastRecordingPath!)}',
+              style: const TextStyle(fontSize: 12),
+            ),
+          ),
+
+        if (_lastProcessedFilePath != null)
+          Padding(
+            padding: const EdgeInsets.only(bottom: 8.0),
+            child: Text(
+              'Processed Data: ${path.basename(_lastProcessedFilePath!)}',
+              style: const TextStyle(fontSize: 12),
+            ),
+          ),
+      ],
+    );
   }
 }
 

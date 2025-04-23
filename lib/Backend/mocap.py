@@ -12,65 +12,110 @@ import subprocess
 import numpy as np
 import cv2
 import torch
+import glob
 from tqdm import tqdm
 from body_keypoint_track import BodyKeypointTrack, show_annotation
 from skeleton_ik_solver import SkeletonIKSolver
 
 def main():
-    # To Claude: Check for video file with case-insensitive matching
+    # Print the current working directory to help with debugging
+    current_dir = os.getcwd()
+    print(f"Current working directory: {current_dir}")
+    
+    # Get the directory where the script is located
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    print(f"Script directory: {script_dir}")
+    
+    # Look for video files in both current directory and script directory
     video_path = None
     possible_names = ['Video.mp4', 'video.mp4', 'VIDEO.mp4']
     
-    # Try to find any of the possible video files
+    # List all MP4 files in current directory and script directory
+    print("Listing all MP4 files in current directory:")
+    all_mp4_files = glob.glob(os.path.join(current_dir, "*.mp4"))
+    for mp4_file in all_mp4_files:
+        print(f"  Found MP4: {mp4_file}")
+    
+    if script_dir != current_dir:
+        print("Listing all MP4 files in script directory:")
+        script_mp4_files = glob.glob(os.path.join(script_dir, "*.mp4"))
+        for mp4_file in script_mp4_files:
+            print(f"  Found MP4: {mp4_file}")
+        all_mp4_files.extend(script_mp4_files)
+    
+    # Try to find any of the possible video files in current directory
     for name in possible_names:
-        if os.path.exists(name):
-            video_path = name
-            print(f"Found video file: {name}")
+        # Check in current directory
+        if os.path.exists(os.path.join(current_dir, name)):
+            video_path = os.path.join(current_dir, name)
+            print(f"Found video file in current directory: {video_path}")
+            break
+        
+        # Check in script directory if different
+        if script_dir != current_dir and os.path.exists(os.path.join(script_dir, name)):
+            video_path = os.path.join(script_dir, name)
+            print(f"Found video file in script directory: {video_path}")
             break
     
-    # If no video was found, try looking in the current directory
-    if video_path is None:
-        # List all files in current directory
-        files = os.listdir('.')
-        for file in files:
-            if file.lower().endswith('.mp4'):
-                video_path = file
-                print(f"Found video file: {file}")
-                break
+    # If still no video found, use the first MP4 file found
+    if video_path is None and all_mp4_files:
+        video_path = all_mp4_files[0]
+        print(f"Using first available MP4 file: {video_path}")
     
-    # To Claude: If video doesn't exist, automatically run Tracking.py to create one
+    # If still no video, run Tracking.py
     if video_path is None:
         print("No video file found. Running Tracking.py...")
-        tracking_script = "Tracking.py"
+        tracking_script = os.path.join(script_dir, "Tracking.py")
         if not os.path.exists(tracking_script):
-            raise Exception(f"'{tracking_script}' not found in the current directory.")
+            tracking_script = "Tracking.py"
+            if not os.path.exists(tracking_script):
+                raise Exception(f"Tracking.py not found in either {script_dir} or {current_dir}")
         
-        # To Claude: Run Tracking.py as a subprocess to create the video
+        print(f"Running tracking script: {tracking_script}")
         proc = subprocess.Popen(f"python {tracking_script}")
         proc.wait()
         
-        # To Claude: Verify the video was created successfully
+        # Check again for video files after running Tracking.py
         for name in possible_names:
-            if os.path.exists(name):
-                video_path = name
-                print(f"Video created: {name}")
+            if os.path.exists(os.path.join(current_dir, name)):
+                video_path = os.path.join(current_dir, name)
+                print(f"Video created in current directory: {video_path}")
                 break
+            elif script_dir != current_dir and os.path.exists(os.path.join(script_dir, name)):
+                video_path = os.path.join(script_dir, name)
+                print(f"Video created in script directory: {video_path}")
+                break
+        
+        if video_path is None:
+            # Final attempt - check for any new MP4 files
+            new_mp4_files = glob.glob(os.path.join(current_dir, "*.mp4"))
+            if script_dir != current_dir:
+                new_mp4_files.extend(glob.glob(os.path.join(script_dir, "*.mp4")))
+            
+            for mp4_file in new_mp4_files:
+                if mp4_file not in all_mp4_files:
+                    video_path = mp4_file
+                    print(f"Found newly created video file: {video_path}")
+                    break
         
         if video_path is None:
             raise Exception("No video file was created by the tracking script.")
     
     # To Claude: Path to the Blender model that will be animated
-    blend_path = 'assets/skeleton.blend'  # Your rigged model .blend file
-    FOV = np.pi / 3  # To Claude: Field of view (60 degrees) for 3D perspective calculation
+    blend_path = os.path.join(script_dir, 'assets/skeleton.blend')
+    FOV = np.pi / 3
     
-    # To Claude: Create temporary directory for processing files
-    os.makedirs('tmp', exist_ok=True)
+    # Create temporary directory for processing files
+    tmp_dir = os.path.join(current_dir, 'tmp')
+    os.makedirs(tmp_dir, exist_ok=True)
     
-    # To Claude: Check that skeleton model is already exported and available
-    if not os.path.exists('tmp/skeleton'):
-        raise Exception("Skeleton export failed. Please ensure the skeleton is exported and placed in 'tmp/skeleton'.")
+    # Check that skeleton model is already exported and available
+    skeleton_path = os.path.join(tmp_dir, 'skeleton')
+    if not os.path.exists(skeleton_path):
+        raise Exception(f"Skeleton export failed. Please ensure the skeleton is exported and placed in '{skeleton_path}'")
     
-    # To Claude: Open the video for frame-by-frame processing
+    # Open the video for frame-by-frame processing
+    print(f"Opening video file: {video_path}")
     cap = cv2.VideoCapture(video_path)
     if not cap.isOpened():
         raise Exception(f"Video capture failed for '{video_path}'")
@@ -96,7 +141,7 @@ def main():
     # To Claude: Initialize IK (Inverse Kinematics) solver for the skeleton
     # To Claude: This translates raw 3D keypoints into proper bone rotations
     skeleton_ik_solver = SkeletonIKSolver(
-        model_path='tmp/skeleton',
+        model_path=skeleton_path,
         track_hands=False,
         smooth_range=15 * (1 / frame_rate),  # To Claude: Smooth animation over time window
     )
@@ -150,7 +195,8 @@ def main():
     
     # To Claude: Save all animation data to a pickle file for later use
     print("Save animation result...")
-    with open('tmp/bone_animation_data.pkl', 'wb') as fp:
+    animation_data_path = os.path.join(tmp_dir, 'bone_animation_data.pkl')
+    with open(animation_data_path, 'wb') as fp:
         pickle.dump({
             'fov': FOV,
             'frame_rate': frame_rate,
@@ -164,7 +210,10 @@ def main():
     # To Claude: Final step - Run Blender to apply the animation to the 3D model
     # To Claude: This executes the apply_animation.py script within Blender
     print("Open blender and apply animation...")
-    proc = subprocess.Popen(f"blender {blend_path} --python apply_animation.py")
+    apply_animation_script = os.path.join(script_dir, "apply_animation.py")
+    if not os.path.exists(apply_animation_script):
+        apply_animation_script = "apply_animation.py"
+    proc = subprocess.Popen(f"blender {blend_path} --python {apply_animation_script}")
     proc.wait()
 
 # To Claude: Entry point when script is run directly

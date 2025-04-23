@@ -7,6 +7,7 @@ import numpy as np
 import cv2
 import torch
 import glob
+import sys
 from tqdm import tqdm
 from body_keypoint_track import BodyKeypointTrack, show_annotation
 from skeleton_ik_solver import SkeletonIKSolver
@@ -95,24 +96,43 @@ def main():
         if video_path is None:
             raise Exception("No video file was created by the tracking script.")
     
+    # Confirm video was found
+    print(f"CONFIRMED: Using video file: {video_path}")
+    print(f"Video exists check: {os.path.exists(video_path)}")
+    
     # Path to the blender model
     blend_path = os.path.join(script_dir, 'assets/skeleton.blend')
+    print(f"Blender model path: {blend_path}")
     FOV = np.pi / 3  # Field of view, set to 60 degrees
     
     # Create temporary directory for processing files
     tmp_dir = os.path.join(current_dir, 'tmp')
     os.makedirs(tmp_dir, exist_ok=True)
+    print(f"Created tmp directory: {tmp_dir}")
     
     # Ensure that the skeleton folder is already present
     skeleton_path = os.path.join(tmp_dir, 'skeleton')
     if not os.path.exists(skeleton_path):
-        raise Exception(f"Skeleton export failed. Please ensure the skeleton is exported and placed in '{skeleton_path}'")
+        print(f"ERROR: Skeleton directory not found at {skeleton_path}")
+        print(f"Creating skeleton directory...")
+        os.makedirs(skeleton_path, exist_ok=True)
+        print(f"Please ensure skeleton model files are copied to this directory before proceeding.")
+        sys.stdout.flush()
+    else:
+        print(f"Found skeleton directory: {skeleton_path}")
     
     # Open the video for frame-by-frame processing
     print(f"Opening video file: {video_path}")
+    sys.stdout.flush()
+    
     cap = cv2.VideoCapture(video_path)
     if not cap.isOpened():
-        raise Exception(f"Video capture failed for '{video_path}'")
+        print(f"ERROR: Failed to open video: {video_path}")
+        # Try with VideoCapture(0) as fallback for webcam
+        print("Attempting to open default camera...")
+        cap = cv2.VideoCapture(0)
+        if not cap.isOpened():
+            raise Exception(f"Video capture failed for '{video_path}' and no webcam available.")
     
     # Get video properties
     frame_width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
@@ -120,89 +140,125 @@ def main():
     frame_rate = cap.get(cv2.CAP_PROP_FPS)
     total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
     
-    # Initialize body keypoint tracker
-    body_keypoint_track = BodyKeypointTrack(
-        im_width=frame_width,
-        im_height=frame_height,
-        fov=FOV,
-        frame_rate=frame_rate,
-        track_hands=True,
-        smooth_range=10 * (1 / frame_rate),
-        smooth_range_barycenter=30 * (1 / frame_rate),
-    )
+    print(f"Video properties: {frame_width}x{frame_height} @ {frame_rate}fps, {total_frames} frames")
+    sys.stdout.flush()
     
-    # Initialize the skeleton IK solver
-    skeleton_ik_solver = SkeletonIKSolver(
-        model_path=skeleton_path,
-        track_hands=False,
-        smooth_range=15 * (1 / frame_rate),
-    )
+    try:
+        # Initialize body keypoint tracker
+        print("Initializing body keypoint tracker...")
+        sys.stdout.flush()
+        body_keypoint_track = BodyKeypointTrack(
+            im_width=frame_width,
+            im_height=frame_height,
+            fov=FOV,
+            frame_rate=frame_rate,
+            track_hands=True,
+            smooth_range=10 * (1 / frame_rate),
+            smooth_range_barycenter=30 * (1 / frame_rate),
+        )
+        
+        # Initialize the skeleton IK solver
+        print("Initializing skeleton IK solver...")
+        sys.stdout.flush()
+        skeleton_ik_solver = SkeletonIKSolver(
+            model_path=skeleton_path,
+            track_hands=False,
+            smooth_range=15 * (1 / frame_rate),
+        )
+        
+        # Data lists to store bone data
+        bone_euler_sequence, scale_sequence, location_sequence = [], [], []
+        
+        # Time tracking
+        frame_t = 0.0
+        frame_i = 0
+        print("Beginning motion capture processing...")
+        sys.stdout.flush()
+        bar = tqdm(total=total_frames, desc='Processing frames')
+        
+        while cap.isOpened():
+            ret, frame = cap.read()
+            if not ret:
+                print(f"End of video reached after {frame_i} frames")
+                break
+            
+            if frame_i % 10 == 0:  # Update progress less frequently
+                print(f"Processing frame {frame_i}/{total_frames}")
+                sys.stdout.flush()
+            
+            frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+            
+            # Get 3D body keypoints
+            body_keypoint_track.track(frame, frame_t)
+            kpts3d, valid = body_keypoint_track.get_smoothed_3d_keypoints(frame_t)
+            
+            # Solve for the skeleton pose using IK
+            skeleton_ik_solver.fit(torch.from_numpy(kpts3d).float(), torch.from_numpy(valid).bool(), frame_t)
+            
+            # Get smoothed pose data
+            bone_euler = skeleton_ik_solver.get_smoothed_bone_euler(frame_t)
+            location = skeleton_ik_solver.get_smoothed_location(frame_t)
+            scale = skeleton_ik_solver.get_scale()
+            
+            # Append the data to the sequences
+            bone_euler_sequence.append(bone_euler)
+            location_sequence.append(location)
+            scale_sequence.append(scale)
+            
+            # Show the keypoints on the frame (optional)
+            show_annotation(frame, kpts3d, valid, body_keypoint_track.K)
+            
+            if cv2.waitKey(1) == 27:  # Exit if 'ESC' is pressed
+                print('Cancelled by user. Exit.')
+                break
+            
+            # Increment frame time
+            frame_i += 1
+            frame_t += 1.0 / frame_rate
+            bar.update(1)
+        
+        cap.release()
+        print(f"Video processing complete. Processed {frame_i} frames.")
+        
+        # Save animation result as a pickle file
+        print("Saving animation result...")
+        sys.stdout.flush()
+        animation_data_path = os.path.join(tmp_dir, 'bone_animation_data.pkl')
+        with open(animation_data_path, 'wb') as fp:
+            pickle.dump({
+                'fov': FOV,
+                'frame_rate': frame_rate,
+                'bone_names': skeleton_ik_solver.optimizable_bones,
+                'bone_euler_sequence': bone_euler_sequence,
+                'location_sequence': location_sequence,
+                'scale': np.mean(scale_sequence),
+                'all_bone_names': skeleton_ik_solver.all_bone_names
+            }, fp)
+        print(f"Animation data saved to {animation_data_path}")
+        
+        # Open Blender and apply the animation to the rigged model
+        print("Opening Blender to apply animation...")
+        sys.stdout.flush()
+        apply_animation_script = os.path.join(script_dir, "apply_animation.py")
+        if not os.path.exists(apply_animation_script):
+            apply_animation_script = "apply_animation.py"
+            if not os.path.exists(apply_animation_script):
+                print(f"WARNING: Could not find apply_animation.py script in {script_dir} or {current_dir}")
+        
+        print(f"Running: blender {blend_path} --python {apply_animation_script}")
+        proc = subprocess.Popen(f"blender {blend_path} --python {apply_animation_script}")
+        proc.wait()
+        print("Blender process completed.")
     
-    # Data lists to store bone data
-    bone_euler_sequence, scale_sequence, location_sequence = [], [], []
-    
-    # Time tracking
-    frame_t = 0.0
-    frame_i = 0
-    bar = tqdm(total=total_frames, desc='Running...')
-    
-    while cap.isOpened():
-        ret, frame = cap.read()
-        if not ret:
-            break
-        
-        frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-        
-        # Get 3D body keypoints
-        body_keypoint_track.track(frame, frame_t)
-        kpts3d, valid = body_keypoint_track.get_smoothed_3d_keypoints(frame_t)
-        
-        # Solve for the skeleton pose using IK
-        skeleton_ik_solver.fit(torch.from_numpy(kpts3d).float(), torch.from_numpy(valid).bool(), frame_t)
-        
-        # Get smoothed pose data
-        bone_euler = skeleton_ik_solver.get_smoothed_bone_euler(frame_t)
-        location = skeleton_ik_solver.get_smoothed_location(frame_t)
-        scale = skeleton_ik_solver.get_scale()
-        
-        # Append the data to the sequences
-        bone_euler_sequence.append(bone_euler)
-        location_sequence.append(location)
-        scale_sequence.append(scale)
-        
-        # Show the keypoints on the frame (optional)
-        show_annotation(frame, kpts3d, valid, body_keypoint_track.K)
-        
-        if cv2.waitKey(1) == 27:  # Exit if 'ESC' is pressed
-            print('Cancelled by user. Exit.')
-            exit()
-        
-        # Increment frame time
-        frame_i += 1
-        frame_t += 1.0 / frame_rate
-        bar.update(1)
-    
-    # Save animation result as a pickle file
-    print("Save animation result...")
-    animation_data_path = os.path.join(tmp_dir, 'bone_animation_data.pkl')
-    with open(animation_data_path, 'wb') as fp:
-        pickle.dump({
-            'fov': FOV,
-            'frame_rate': frame_rate,
-            'bone_names': skeleton_ik_solver.optimizable_bones,
-            'bone_euler_sequence': bone_euler_sequence,
-            'location_sequence': location_sequence,
-            'scale': np.mean(scale_sequence),
-            'all_bone_names': skeleton_ik_solver.all_bone_names
-        }, fp)
-    
-    # Open Blender and apply the animation to the rigged model
-    print("Open blender and apply animation...")
-    apply_animation_script = os.path.join(script_dir, "apply_animation.py")
-    if not os.path.exists(apply_animation_script):
-        apply_animation_script = "apply_animation.py"
-    proc = subprocess.Popen(f"blender {blend_path} --python {apply_animation_script}")
-    proc.wait()
+    except Exception as e:
+        print(f"ERROR in motion capture processing: {e}")
+        import traceback
+        traceback.print_exc()
+    finally:
+        if cap.isOpened():
+            cap.release()
+        cv2.destroyAllWindows()
+        print("Motion capture process finished.")
 
 if __name__ == '__main__':
     main()

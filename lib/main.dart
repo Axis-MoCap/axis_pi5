@@ -4,8 +4,12 @@ import 'package:path_provider/path_provider.dart';
 import 'dart:math' as math;
 import 'dart:async';
 import 'package:intl/intl.dart';
+import 'package:flutter_svg/flutter_svg.dart';
 import 'recording_service.dart';
 import 'camera_service.dart';
+import 'authentication/register_page.dart';
+import 'authentication/login_page.dart';
+import 'pages/on_boarding.dart';
 
 void main() {
   runApp(const AxisMocapApp());
@@ -30,7 +34,8 @@ class AxisMocapApp extends StatelessWidget {
         ),
         useMaterial3: true,
       ),
-      home: const MocapHomePage(title: 'Axis Advanced Motion Capture System'),
+      // Start with the onboarding/login flow instead of going directly to home
+      home: const Onboarding(),
     );
   }
 }
@@ -1835,6 +1840,7 @@ class _CameraFeedViewState extends State<CameraFeedView> {
   String _errorMessage = '';
   int _reconnectAttempts = 0;
   final int _maxReconnectAttempts = 3;
+  Timer? _reconnectTimer;
 
   @override
   void initState() {
@@ -1926,6 +1932,7 @@ class _CameraFeedViewState extends State<CameraFeedView> {
   void dispose() {
     _cameraStatusSubscription?.cancel();
     _cameraService.stopCameraStream();
+    _reconnectTimer?.cancel();
     super.dispose();
   }
 

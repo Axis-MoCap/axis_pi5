@@ -35,7 +35,7 @@ class RaspberryPi5Camera:
         self.height = height
         self.fps = fps
         self.process = None
-        self.frame_queue = queue.Queue(maxsize=2)  # Limit queue size to prevent memory issues
+        self.frame_queue = queue.Queue(maxsize=5)  # Increase queue size for smoother streaming
         self.mode = 'libcamera-vid'  # Default mode
         
     def start(self):
@@ -76,7 +76,8 @@ class RaspberryPi5Camera:
                     '--framerate', str(self.fps),
                     '--codec', 'mjpeg',  # Use MJPEG for better performance
                     '--output', '-',  # Stream to stdout
-                    '--verbose', # Add verbose output for debugging
+                    '--timeout', '0',  # Run continuously
+                    '--nopreview',    # No preview window
                 ]
             else:  # ffmpeg mode
                 # Use ffmpeg as fallback
@@ -156,7 +157,7 @@ class RaspberryPi5Camera:
             frame_count = 0
             last_report_time = time.time()
             
-            while running and self.process.poll() is None:
+            while running and self.process and self.process.poll() is None:
                 data = self.process.stdout.read(4096)  # Read in chunks
                 
                 if not data:
@@ -212,7 +213,7 @@ class RaspberryPi5Camera:
     def get_frame(self):
         try:
             # Non-blocking get with timeout
-            return self.frame_queue.get(timeout=1.0)
+            return self.frame_queue.get(timeout=0.5)  # Reduced timeout for more responsive streaming
         except queue.Empty:
             return None
     
@@ -241,6 +242,7 @@ class RaspberryPiCamera:
         self.height = height
         self.fps = fps
         self.process = None
+        self.frame_queue = queue.Queue(maxsize=5)  # Add a queue for continuous streaming
         
     def start(self):
         try:
@@ -287,6 +289,11 @@ class RaspberryPiCamera:
             else:
                 print("Could not determine Raspberry Pi camera mode", file=sys.stderr)
                 return False
+            
+            # Start a thread to read frames
+            self.thread = Thread(target=self._read_frames)
+            self.thread.daemon = True
+            self.thread.start()
                 
             return True
         except Exception as e:
@@ -307,58 +314,77 @@ class RaspberryPiCamera:
                 return 'v4l2'
         except:
             return 'v4l2'  # Default to v4l2 interface
-    
-    def get_frame(self):
-        """Read and encode a single frame"""
+
+    def _read_frames(self):
+        # Similar implementation as RaspberryPi5Camera
         try:
-            # For simplicity, read a complete JPEG frame
-            # This is a simplified implementation - in production, should properly parse video stream
-            
-            # Read data until JPEG end marker is found
             buffer = io.BytesIO()
             start_marker_found = False
-            end_marker_found = False
             
-            # Set a timeout to avoid blocking forever
-            start_time = time.time()
-            timeout = 1.0  # 1 second timeout
+            print("DEBUG: Starting legacy Pi camera reading thread", file=sys.stderr)
+            frame_count = 0
+            last_report_time = time.time()
             
-            while not end_marker_found and time.time() - start_time < timeout:
-                data = self.process.stdout.read(1024)  # Read in chunks
+            while running and self.process and self.process.poll() is None:
+                data = self.process.stdout.read(4096)
                 
                 if not data:
+                    print("DEBUG: End of stream reached", file=sys.stderr)
                     break
                 
-                # Look for JPEG markers in the data
-                for i in range(len(data)-1):
-                    # Start marker (0xFF 0xD8)
-                    if not start_marker_found and data[i] == 0xFF and data[i+1] == 0xD8:
-                        buffer = io.BytesIO()  # Reset buffer
-                        buffer.write(data[i:])
+                # Look for JPEG markers
+                i = 0
+                while i < len(data):
+                    # Start marker
+                    if not start_marker_found and i < len(data) - 1 and data[i] == 0xFF and data[i+1] == 0xD8:
+                        buffer = io.BytesIO()
+                        buffer.write(data[i:i+2])
                         start_marker_found = True
-                        break
-                    # End marker (0xFF 0xD9)
-                    elif start_marker_found and data[i] == 0xFF and data[i+1] == 0xD9:
-                        buffer.write(data[:i+2])  # Include the end marker
-                        end_marker_found = True
-                        break
-                
-                if not start_marker_found:
-                    buffer.write(data)
-            
-            if end_marker_found:
-                jpeg_data = buffer.getvalue()
-                return base64.b64encode(jpeg_data).decode('utf-8')
-            
-            return None
+                        i += 2
+                    # End marker
+                    elif start_marker_found and i < len(data) - 1 and data[i] == 0xFF and data[i+1] == 0xD9:
+                        buffer.write(data[i:i+2])
+                        
+                        # Complete JPEG - add to queue
+                        jpeg_data = buffer.getvalue()
+                        try:
+                            if not self.frame_queue.full():
+                                b64_frame = base64.b64encode(jpeg_data).decode('utf-8')
+                                self.frame_queue.put(b64_frame, block=False)
+                                frame_count += 1
+                        except queue.Full:
+                            pass
+                            
+                        start_marker_found = False
+                        i += 2
+                    elif start_marker_found:
+                        buffer.write(bytes([data[i]]))
+                        i += 1
+                    else:
+                        i += 1
+                        
+                # Report frames
+                current_time = time.time()
+                if current_time - last_report_time >= 5:
+                    print(f"DEBUG: Legacy Pi camera processed {frame_count} frames", file=sys.stderr)
+                    frame_count = 0
+                    last_report_time = current_time
         except Exception as e:
-            print(f"Error getting frame: {e}", file=sys.stderr)
+            print(f"Error in legacy Pi camera frame reading: {e}", file=sys.stderr)
+    
+    def get_frame(self):
+        try:
+            return self.frame_queue.get(timeout=0.5)
+        except queue.Empty:
             return None
     
     def release(self):
         if self.process:
             self.process.terminate()
             self.process = None
+            
+        if hasattr(self, 'thread') and self.thread.is_alive():
+            self.thread.join(timeout=1.0)
 
 class WebCamera:
     """Camera interface for USB webcams or other V4L2 cameras"""
@@ -369,6 +395,7 @@ class WebCamera:
         self.height = height
         self.fps = fps
         self.process = None
+        self.frame_queue = queue.Queue(maxsize=5)  # Add a queue for continuous streaming
         
     def start(self):
         try:
@@ -393,6 +420,11 @@ class WebCamera:
                 stderr=subprocess.PIPE
             )
             
+            # Start a thread to read frames
+            self.thread = Thread(target=self._read_frames)
+            self.thread.daemon = True
+            self.thread.start()
+            
             # Wait a moment for process to start
             time.sleep(0.5)
             
@@ -401,56 +433,76 @@ class WebCamera:
             print(f"Error starting webcam: {e}", file=sys.stderr)
             return False
     
-    def get_frame(self):
-        """Read and encode a single frame"""
+    def _read_frames(self):
+        # Similar implementation as RaspberryPi5Camera
         try:
-            # Similar approach to RaspberryPiCamera
             buffer = io.BytesIO()
             start_marker_found = False
-            end_marker_found = False
             
-            # Set a timeout to avoid blocking forever
-            start_time = time.time()
-            timeout = 1.0  # 1 second timeout
+            print("DEBUG: Starting webcam reading thread", file=sys.stderr)
+            frame_count = 0
+            last_report_time = time.time()
             
-            while not end_marker_found and time.time() - start_time < timeout:
-                data = self.process.stdout.read(4096)  # Read in larger chunks for efficiency
+            while running and self.process and self.process.poll() is None:
+                data = self.process.stdout.read(4096)
                 
                 if not data:
+                    print("DEBUG: End of webcam stream reached", file=sys.stderr)
                     break
                 
                 # Look for JPEG markers
                 i = 0
-                while i < len(data) - 1:
-                    # Start marker (0xFF 0xD8)
-                    if not start_marker_found and data[i] == 0xFF and data[i+1] == 0xD8:
-                        buffer = io.BytesIO()  # Reset buffer
-                        buffer.write(data[i:])
+                while i < len(data):
+                    # Start marker
+                    if not start_marker_found and i < len(data) - 1 and data[i] == 0xFF and data[i+1] == 0xD8:
+                        buffer = io.BytesIO()
+                        buffer.write(data[i:i+2])
                         start_marker_found = True
-                        break
-                    # End marker (0xFF 0xD9)
-                    elif start_marker_found and data[i] == 0xFF and data[i+1] == 0xD9:
-                        buffer.write(data[:i+2])  # Include the end marker
-                        end_marker_found = True
-                        break
-                    i += 1
-                
-                if not start_marker_found and not end_marker_found:
-                    buffer.write(data)
-            
-            if start_marker_found and end_marker_found:
-                jpeg_data = buffer.getvalue()
-                return base64.b64encode(jpeg_data).decode('utf-8')
-            
-            return None
+                        i += 2
+                    # End marker
+                    elif start_marker_found and i < len(data) - 1 and data[i] == 0xFF and data[i+1] == 0xD9:
+                        buffer.write(data[i:i+2])
+                        
+                        # Complete JPEG - add to queue
+                        jpeg_data = buffer.getvalue()
+                        try:
+                            if not self.frame_queue.full():
+                                b64_frame = base64.b64encode(jpeg_data).decode('utf-8')
+                                self.frame_queue.put(b64_frame, block=False)
+                                frame_count += 1
+                        except queue.Full:
+                            pass
+                            
+                        start_marker_found = False
+                        i += 2
+                    elif start_marker_found:
+                        buffer.write(bytes([data[i]]))
+                        i += 1
+                    else:
+                        i += 1
+                        
+                # Report frames
+                current_time = time.time()
+                if current_time - last_report_time >= 5:
+                    print(f"DEBUG: Webcam processed {frame_count} frames", file=sys.stderr)
+                    frame_count = 0
+                    last_report_time = current_time
         except Exception as e:
-            print(f"Error getting webcam frame: {e}", file=sys.stderr)
+            print(f"Error in webcam frame reading: {e}", file=sys.stderr)
+    
+    def get_frame(self):
+        try:
+            return self.frame_queue.get(timeout=0.5)
+        except queue.Empty:
             return None
     
     def release(self):
         if self.process:
             self.process.terminate()
             self.process = None
+            
+        if hasattr(self, 'thread') and self.thread.is_alive():
+            self.thread.join(timeout=1.0)
 
 def main():
     parser = argparse.ArgumentParser(description='Stream camera feed')

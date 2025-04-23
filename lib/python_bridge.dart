@@ -19,14 +19,15 @@ class PythonBridge {
   Future<void> _initScriptsPath() async {
     try {
       List<String> possiblePaths = [];
-      
+
       if (Platform.isLinux) {
         // Try to detect if we're on a Raspberry Pi
         bool isRaspberryPi = false;
         try {
           // Try to read the model from /proc/cpuinfo
           final cpuInfo = File('/proc/cpuinfo').readAsStringSync();
-          isRaspberryPi = cpuInfo.contains('Raspberry Pi') || cpuInfo.contains('BCM');
+          isRaspberryPi =
+              cpuInfo.contains('Raspberry Pi') || cpuInfo.contains('BCM');
           debugPrint('CPU Info check: isRaspberryPi = $isRaspberryPi');
         } catch (e) {
           debugPrint('Error reading CPU info: $e');
@@ -37,7 +38,7 @@ class PythonBridge {
         if (isRaspberryPi) {
           possiblePaths.add('/home/pi/axis_mocap/python_scripts');
         }
-        
+
         // Add current directory and standardized locations
         possiblePaths.add(path.join(Directory.current.path, 'python_scripts'));
         possiblePaths.add('/usr/local/share/axis_mocap/python_scripts');
@@ -48,27 +49,28 @@ class PythonBridge {
         possiblePaths.add(path.join(appDir.path, 'python_scripts'));
         possiblePaths.add(path.join(Directory.current.path, 'python_scripts'));
       }
-      
+
       debugPrint('Possible Python script paths: $possiblePaths');
-      
+
       // Try each path and use the first one that exists
       for (final scriptPath in possiblePaths) {
         final dir = Directory(scriptPath);
         if (await dir.exists()) {
           _scriptsPath = scriptPath;
           debugPrint('Using Python scripts path: $_scriptsPath');
-          
+
           // Make scripts executable
           await _makeScriptsExecutable();
           _initialized = true;
           return;
         }
       }
-      
+
       // If no existing directory is found, use the first path but print a warning
       _scriptsPath = possiblePaths.first;
-      debugPrint('WARNING: No existing scripts directory found. Using: $_scriptsPath');
-      
+      debugPrint(
+          'WARNING: No existing scripts directory found. Using: $_scriptsPath');
+
       // Create the directory if it doesn't exist
       await Directory(_scriptsPath).create(recursive: true);
       _initialized = true;
@@ -78,7 +80,7 @@ class PythonBridge {
       _initialized = true; // Still mark as initialized to avoid hanging
     }
   }
-  
+
   // Make Python scripts executable
   Future<void> _makeScriptsExecutable() async {
     if (!Platform.isWindows) {
@@ -112,7 +114,7 @@ class PythonBridge {
       await Future.delayed(const Duration(milliseconds: 100));
       attempts++;
     }
-    
+
     if (!_initialized) {
       debugPrint('WARNING: PythonBridge initialization timed out');
     }
@@ -144,7 +146,7 @@ class PythonBridge {
     try {
       // Ensure the bridge is initialized
       await ensureInitialized();
-      
+
       final id = processId.isEmpty ? scriptName : processId;
 
       // Check if we already have this process running
@@ -157,15 +159,22 @@ class PythonBridge {
         _outputControllers[id] = StreamController<String>.broadcast();
       }
 
-      // Build the command and arguments
-      final scriptPath = path.join(_scriptsPath, scriptName);
-      
+      // Handle absolute paths in scriptName
+      String fullScriptPath;
+      if (scriptName.startsWith('lib/')) {
+        // This is an absolute path from the project root
+        fullScriptPath = scriptName;
+      } else {
+        // This is a relative path to the scripts directory
+        fullScriptPath = path.join(_scriptsPath, scriptName);
+      }
+
       // Make sure the script exists
-      final scriptFile = File(scriptPath);
+      final scriptFile = File(fullScriptPath);
       if (!await scriptFile.exists()) {
-        final error = 'ERROR: Script not found: $scriptPath';
-        debugPrint(error);
-        
+        final error = 'ERROR: Script not found: $fullScriptPath';
+        debugPrint('### PYTHON ERROR: $error ###');
+
         if (captureOutput) {
           _outputControllers[id]?.add(error);
           _outputControllers[id]?.close();
@@ -177,33 +186,34 @@ class PythonBridge {
       // Choose the command based on platform
       String command;
       List<String> commandArgs;
-      
+
       if (Platform.isWindows) {
         command = 'python';
-        commandArgs = [scriptPath, ...args];
+        commandArgs = [fullScriptPath, ...args];
       } else {
         // On Unix platforms, try to run the script directly if it's executable
         try {
           // Make the script executable
-          await Process.run('chmod', ['+x', scriptPath]);
-          
-          command = scriptPath;
+          await Process.run('chmod', ['+x', fullScriptPath]);
+
+          command = fullScriptPath;
           commandArgs = args;
         } catch (e) {
           // If making the script executable fails, fall back to python3
-          debugPrint('WARNING: Failed to make script executable: $e');
+          debugPrint(
+              '### PYTHON WARNING: Failed to make script executable: $e, falling back to python3 ###');
           command = 'python3';
-          commandArgs = [scriptPath, ...args];
+          commandArgs = [fullScriptPath, ...args];
         }
       }
 
-      debugPrint('Running: $command ${commandArgs.join(' ')}');
+      debugPrint('### PYTHON: Running: $command ${commandArgs.join(' ')} ###');
 
       // Start the process
       final process = await Process.start(
-        command, 
+        command,
         commandArgs,
-        workingDirectory: _scriptsPath,
+        workingDirectory: path.dirname(fullScriptPath),
         includeParentEnvironment: true,
       );
       _activeProcesses[id] = process;
@@ -213,19 +223,30 @@ class PythonBridge {
         // Handle stdout
         process.stdout.transform(const SystemEncoding().decoder).listen((data) {
           _outputControllers[id]?.add(data);
-          debugPrint('[$id] stdout: $data');
+          // Only print important messages to reduce noise
+          if (data.contains('Error') ||
+              data.contains('Recording') ||
+              data.contains('Processing') ||
+              data.contains('STATUS:')) {
+            debugPrint('### PYTHON [$id]: $data ###');
+          }
         });
 
         // Handle stderr
         process.stderr.transform(const SystemEncoding().decoder).listen((data) {
           _outputControllers[id]?.add('ERROR: $data');
-          debugPrint('[$id] stderr: $data');
+          // Only print real errors, not noise
+          if (data.trim().isNotEmpty &&
+              !data.contains('WARNING:') &&
+              !data.contains('DEBUG:')) {
+            debugPrint('### PYTHON ERROR [$id]: $data ###');
+          }
         });
       }
 
       // Handle process exit
       process.exitCode.then((exitCode) {
-        debugPrint('[$id] process exited with code $exitCode');
+        debugPrint('### PYTHON [$id]: Process exited with code $exitCode ###');
         _activeProcesses.remove(id);
 
         if (captureOutput) {
@@ -238,7 +259,7 @@ class PythonBridge {
 
       return captureOutput ? _outputControllers[id]?.stream : null;
     } catch (e) {
-      debugPrint('Error running Python script: $e');
+      debugPrint('### PYTHON ERROR: Failed to run Python script: $e ###');
       return null;
     }
   }

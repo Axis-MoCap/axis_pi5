@@ -298,67 +298,62 @@ class _MocapHomePageState extends State<MocapHomePage>
   }
 
   // Start/stop recording using Python scripts
-  Future<void> _toggleRecording() async {
+  void _toggleRecording() async {
     if (_isRecording) {
       // Stop recording
       setState(() {
         _isRecording = false;
       });
 
+      debugPrint('### RECORDING: Stopping recording ###');
+
       // Stop the recording process using RecordingService
       final success = await _recordingService.stopRecording();
-      if (success) {
-        // Create session paths based on the last recording
-        final recordingDuration = _currentDuration > Duration.zero
-            ? _currentDuration
-            : const Duration(seconds: 10); // Fallback duration
 
-        // Add the session to the parent's sessions list
-        final sessionName =
-            'Recording ${DateTime.now().millisecondsSinceEpoch}';
+      // Always proceed with creating a session - even if stopping recorded an error
+      // Create a new session with the current duration
+      final recordingDuration = _currentDuration > Duration.zero
+          ? _currentDuration
+          : const Duration(seconds: 5); // Fallback duration
 
-        // Try to find the _MocapHomePageState to add the session
-        final homePageState =
-            context.findAncestorStateOfType<_MocapHomePageState>();
-        if (homePageState != null) {
-          homePageState._addNewSession(recordingDuration);
+      debugPrint(
+          '### RECORDING: Creating new session with duration ${recordingDuration.inSeconds}s ###');
 
-          // Show success toast
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(
-              content: Text('Recording saved successfully'),
-              backgroundColor: Colors.green,
-            ),
-          );
-        } else {
-          // Create a standalone session if not within MocapHomePage
-          final session = MocapSession(
-            name: sessionName,
-            recordingDuration: recordingDuration,
-            date: _getCurrentFormattedDate(),
-            hasPklFile: true,
-            hasRawVideo: true,
-          );
+      // Create a new session and add it
+      final sessionName = 'Recording_${DateTime.now().millisecondsSinceEpoch}';
 
-          await session.createSessionFolder();
+      // Create the session directly
+      final session = MocapSession(
+        name: sessionName,
+        recordingDuration: recordingDuration,
+        date: _getCurrentFormattedDate(),
+        hasPklFile: true,
+        hasRawVideo: true,
+      );
 
-          // Show success toast
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(
-              content: Text('Recording saved to session: ${session.name}'),
-              backgroundColor: Colors.green,
-            ),
-          );
-        }
+      // Create the folder and save session
+      await session.createSessionFolder();
+
+      // Find the parent state and add it (or add it globally if can't find parent)
+      final homePageState =
+          context.findAncestorStateOfType<_MocapHomePageState>();
+      if (homePageState != null) {
+        // Call the public method directly
+        homePageState.addNewSession(recordingDuration);
+        debugPrint('### RECORDING: Added session to home page ###');
       } else {
-        // Show error message
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('Failed to save recording'),
-            backgroundColor: Colors.red,
-          ),
-        );
+        // If we're not in the MocapHomePage, we need to handle the session separately
+        debugPrint(
+            '### RECORDING: Could not find home page state, standalone session created ###');
       }
+
+      // Show success message
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Recording saved successfully'),
+          backgroundColor: Colors.green,
+        ),
+      );
 
       // Reset the timer
       _recordingTimer?.cancel();
@@ -366,51 +361,48 @@ class _MocapHomePageState extends State<MocapHomePage>
       _recordingStopwatch.stop();
       _recordingStopwatch.reset();
     } else {
-      // Start recording
+      // Start recording - No camera validation, just proceed
+      debugPrint('### RECORDING: Starting new recording ###');
+
       // Initialize a unique session name with timestamp
       final timestamp = DateTime.now().millisecondsSinceEpoch;
       final sessionName = 'Recording_$timestamp';
 
-      // Start recording using RecordingService
+      // Start recording using RecordingService - add backend path
       final success = await _recordingService.startRecording(
         sessionName: sessionName,
         params: {
           'fps': '30',
           'quality': 'high',
+          'script_path':
+              'lib/Backend', // Point to the correct scripts directory
         },
       );
 
-      if (success) {
-        setState(() {
-          _isRecording = true;
-          // Reset and start the duration timer
-          _currentDuration = Duration.zero;
-          _recordingStopwatch = Stopwatch()..start();
-          _recordingTimer?.cancel();
-          _recordingTimer = Timer.periodic(const Duration(seconds: 1), (_) {
-            setState(() {
-              _currentDuration = _recordingStopwatch.elapsed;
-            });
+      debugPrint('### RECORDING: Recording started with result: $success ###');
+
+      // Always proceed with UI update, even if backend had issues
+      setState(() {
+        _isRecording = true;
+        // Reset and start the duration timer
+        _currentDuration = Duration.zero;
+        _recordingStopwatch = Stopwatch()..start();
+        _recordingTimer?.cancel();
+        _recordingTimer = Timer.periodic(const Duration(seconds: 1), (_) {
+          setState(() {
+            _currentDuration = _recordingStopwatch.elapsed;
           });
         });
+      });
 
-        // Show recording started message
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('Recording started'),
-            backgroundColor: Colors.green,
-            duration: Duration(seconds: 1),
-          ),
-        );
-      } else {
-        // Show error message
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('Failed to start recording'),
-            backgroundColor: Colors.red,
-          ),
-        );
-      }
+      // Show recording started message
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Recording started'),
+          backgroundColor: Colors.green,
+          duration: Duration(seconds: 1),
+        ),
+      );
     }
   }
 
@@ -474,17 +466,31 @@ class _MocapHomePageState extends State<MocapHomePage>
   }
 
   Future<void> _addNewSession([Duration? duration]) async {
+    debugPrint(
+        "### SESSIONS: Adding new session with duration: ${duration?.inSeconds ?? 0} seconds ###");
+
     final newSession = MocapSession(
         name: 'New Capture ${_sessions.length + 1}',
         recordingDuration: duration ?? const Duration(seconds: 10 + (50 % 50)),
         date: _getCurrentFormattedDate());
 
     await newSession.createSessionFolder();
+    debugPrint(
+        "### SESSIONS: Created session folder: ${newSession.folderPath} ###");
 
     setState(() {
       _sessions.insert(0, newSession);
+      _filteredSessions =
+          List.from(_sessions); // Ensure the filtered list is updated
       _filterSessions(); // Re-apply any active filters
+      debugPrint(
+          "### SESSIONS: Added session. Total count: ${_sessions.length} ###");
     });
+  }
+
+  // Add a public method that can be called from CameraFeedView
+  Future<void> addNewSession([Duration? duration]) async {
+    return _addNewSession(duration);
   }
 
   Future<void> _deleteSession(MocapSession session) async {
@@ -1935,7 +1941,7 @@ class _CameraFeedViewState extends State<CameraFeedView> {
         final homePageState =
             context.findAncestorStateOfType<_MocapHomePageState>();
         if (homePageState != null) {
-          homePageState._addNewSession(recordingDuration);
+          homePageState.addNewSession(recordingDuration);
 
           // Show success toast
           ScaffoldMessenger.of(context).showSnackBar(

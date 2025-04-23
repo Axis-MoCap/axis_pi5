@@ -299,81 +299,118 @@ class _MocapHomePageState extends State<MocapHomePage>
 
   // Start/stop recording using Python scripts
   Future<void> _toggleRecording() async {
-    if (!_isRecording) {
-      // Check if camera is available before starting recording
-      if (!await _checkCameraAvailable()) {
-        return; // Don't proceed if no camera is available
-      }
-
-      if (_delayedStart) {
-        // Show countdown dialog
-        int remainingSeconds = _delayedStartSeconds;
-
-        showDialog(
-            context: context,
-            barrierDismissible: false,
-            builder: (context) {
-              return StatefulBuilder(builder: (context, setState) {
-                _delayTimer =
-                    Timer.periodic(const Duration(seconds: 1), (timer) {
-                  setState(() {
-                    remainingSeconds--;
-                  });
-
-                  if (remainingSeconds <= 0) {
-                    timer.cancel();
-                    Navigator.of(context).pop();
-                    _startRecording();
-                  }
-                });
-
-                return AlertDialog(
-                  title: const Text('Recording Starting Soon'),
-                  content:
-                      Text('Recording will begin in $remainingSeconds seconds'),
-                  actions: [
-                    TextButton(
-                        onPressed: () {
-                          _delayTimer?.cancel();
-                          Navigator.of(context).pop();
-                        },
-                        child: const Text('Cancel')),
-                  ],
-                );
-              });
-            });
-      } else {
-        // Start recording immediately
-        _startRecording();
-      }
-    } else {
+    if (_isRecording) {
       // Stop recording
-      _recordingStopwatch.stop();
-      _recordingTimer?.cancel();
-      _recordingTimer = null;
-
-      // Keep the final duration
-      final finalDuration = _recordingStopwatch.elapsed;
-
-      // Stop the Python recording script
-      final success = await _recordingService.stopRecording();
-
-      if (!success) {
-        // Show error message
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('Failed to stop recording'),
-            backgroundColor: Colors.red,
-          ),
-        );
-      } else {
-        // Add the session with the elapsed duration
-        _addNewSession(finalDuration);
-      }
-
       setState(() {
         _isRecording = false;
       });
+
+      // Stop the recording process using RecordingService
+      final success = await _recordingService.stopRecording();
+      if (success) {
+        // Create session paths based on the last recording
+        final recordingDuration = _currentDuration > Duration.zero
+            ? _currentDuration
+            : const Duration(seconds: 10); // Fallback duration
+
+        // Add the session to the parent's sessions list
+        final sessionName =
+            'Recording ${DateTime.now().millisecondsSinceEpoch}';
+
+        // Try to find the _MocapHomePageState to add the session
+        final homePageState =
+            context.findAncestorStateOfType<_MocapHomePageState>();
+        if (homePageState != null) {
+          homePageState._addNewSession(recordingDuration);
+
+          // Show success toast
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('Recording saved successfully'),
+              backgroundColor: Colors.green,
+            ),
+          );
+        } else {
+          // Create a standalone session if not within MocapHomePage
+          final session = MocapSession(
+            name: sessionName,
+            recordingDuration: recordingDuration,
+            date: _getCurrentFormattedDate(),
+            hasPklFile: true,
+            hasRawVideo: true,
+          );
+
+          await session.createSessionFolder();
+
+          // Show success toast
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text('Recording saved to session: ${session.name}'),
+              backgroundColor: Colors.green,
+            ),
+          );
+        }
+      } else {
+        // Show error message
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Failed to save recording'),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
+
+      // Reset the timer
+      _recordingTimer?.cancel();
+      _recordingTimer = null;
+      _recordingStopwatch.stop();
+      _recordingStopwatch.reset();
+    } else {
+      // Start recording
+      // Initialize a unique session name with timestamp
+      final timestamp = DateTime.now().millisecondsSinceEpoch;
+      final sessionName = 'Recording_$timestamp';
+
+      // Start recording using RecordingService
+      final success = await _recordingService.startRecording(
+        sessionName: sessionName,
+        params: {
+          'fps': '30',
+          'quality': 'high',
+        },
+      );
+
+      if (success) {
+        setState(() {
+          _isRecording = true;
+          // Reset and start the duration timer
+          _currentDuration = Duration.zero;
+          _recordingStopwatch = Stopwatch()..start();
+          _recordingTimer?.cancel();
+          _recordingTimer = Timer.periodic(const Duration(seconds: 1), (_) {
+            setState(() {
+              _currentDuration = _recordingStopwatch.elapsed;
+            });
+          });
+        });
+
+        // Show recording started message
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Recording started'),
+            backgroundColor: Colors.green,
+            duration: Duration(seconds: 1),
+          ),
+        );
+      } else {
+        // Show error message
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Failed to start recording'),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
     }
   }
 
@@ -1822,6 +1859,7 @@ class CameraFeedView extends StatefulWidget {
 
 class _CameraFeedViewState extends State<CameraFeedView> {
   final CameraService _cameraService = CameraService();
+  final RecordingService _recordingService = RecordingService();
   Stream<Image>? _cameraStream;
   bool _isConnecting = true;
   String _errorMessage = '';
@@ -1832,6 +1870,11 @@ class _CameraFeedViewState extends State<CameraFeedView> {
   String? _lastRecordingPath;
   String? _lastProcessedFilePath;
 
+  // Recording timer related properties
+  Stopwatch _recordingStopwatch = Stopwatch();
+  Timer? _recordingTimer;
+  Duration _currentDuration = Duration.zero;
+
   @override
   void initState() {
     super.initState();
@@ -1841,6 +1884,7 @@ class _CameraFeedViewState extends State<CameraFeedView> {
   @override
   void dispose() {
     _reconnectTimer?.cancel();
+    _recordingTimer?.cancel();
     super.dispose();
   }
 
@@ -1875,22 +1919,112 @@ class _CameraFeedViewState extends State<CameraFeedView> {
         _isRecording = false;
       });
 
-      // TODO: Implement stopRecording in CameraService
-      // final recordingInfo = await _cameraService.stopRecording();
-      // if (recordingInfo != null) {
-      //   setState(() {
-      //     _lastRecordingPath = recordingInfo.videoPath;
-      //     _lastProcessedFilePath = recordingInfo.processedDataPath;
-      //   });
-      // }
+      // Stop the recording process using RecordingService
+      final success = await _recordingService.stopRecording();
+      if (success) {
+        // Create session paths based on the last recording
+        final recordingDuration = _currentDuration > Duration.zero
+            ? _currentDuration
+            : const Duration(seconds: 10); // Fallback duration
+
+        // Add the session to the parent's sessions list
+        final sessionName =
+            'Recording ${DateTime.now().millisecondsSinceEpoch}';
+
+        // Try to find the _MocapHomePageState to add the session
+        final homePageState =
+            context.findAncestorStateOfType<_MocapHomePageState>();
+        if (homePageState != null) {
+          homePageState._addNewSession(recordingDuration);
+
+          // Show success toast
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('Recording saved successfully'),
+              backgroundColor: Colors.green,
+            ),
+          );
+        } else {
+          // Create a standalone session if not within MocapHomePage
+          final session = MocapSession(
+            name: sessionName,
+            recordingDuration: recordingDuration,
+            date: _getCurrentFormattedDate(),
+            hasPklFile: true,
+            hasRawVideo: true,
+          );
+
+          await session.createSessionFolder();
+
+          // Show success toast
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text('Recording saved to session: ${session.name}'),
+              backgroundColor: Colors.green,
+            ),
+          );
+        }
+      } else {
+        // Show error message
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Failed to save recording'),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
+
+      // Reset the timer
+      _recordingTimer?.cancel();
+      _recordingTimer = null;
+      _recordingStopwatch.stop();
+      _recordingStopwatch.reset();
     } else {
       // Start recording
-      setState(() {
-        _isRecording = true;
-      });
+      // Initialize a unique session name with timestamp
+      final timestamp = DateTime.now().millisecondsSinceEpoch;
+      final sessionName = 'Recording_$timestamp';
 
-      // TODO: Implement startRecording in CameraService
-      // await _cameraService.startRecording();
+      // Start recording using RecordingService
+      final success = await _recordingService.startRecording(
+        sessionName: sessionName,
+        params: {
+          'fps': '30',
+          'quality': 'high',
+        },
+      );
+
+      if (success) {
+        setState(() {
+          _isRecording = true;
+          // Reset and start the duration timer
+          _currentDuration = Duration.zero;
+          _recordingStopwatch = Stopwatch()..start();
+          _recordingTimer?.cancel();
+          _recordingTimer = Timer.periodic(const Duration(seconds: 1), (_) {
+            setState(() {
+              _currentDuration = _recordingStopwatch.elapsed;
+            });
+          });
+        });
+
+        // Show recording started message
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Recording started'),
+            backgroundColor: Colors.green,
+            duration: Duration(seconds: 1),
+          ),
+        );
+      } else {
+        // Show error message
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Failed to start recording'),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
     }
   }
 
@@ -1920,32 +2054,74 @@ class _CameraFeedViewState extends State<CameraFeedView> {
       children: [
         // Camera feed - takes most of the space
         Expanded(
-          child: Container(
-            decoration: BoxDecoration(
-              border: Border.all(
-                color: _isRecording ? Colors.red : Colors.grey.shade800,
-                width: 1,
-              ),
-              borderRadius: BorderRadius.circular(8),
-            ),
-            child: ClipRRect(
-              borderRadius: BorderRadius.circular(7),
-              child: StreamBuilder<Image>(
-                stream: _cameraStream,
-                builder: (context, snapshot) {
-                  if (snapshot.hasError) {
-                    return Center(child: Text('Error: ${snapshot.error}'));
-                  }
+          child: Stack(
+            children: [
+              // Camera feed container
+              Container(
+                decoration: BoxDecoration(
+                  border: Border.all(
+                    color: _isRecording ? Colors.red : Colors.grey.shade800,
+                    width: 1,
+                  ),
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: ClipRRect(
+                  borderRadius: BorderRadius.circular(7),
+                  child: StreamBuilder<Image>(
+                    stream: _cameraStream,
+                    builder: (context, snapshot) {
+                      if (snapshot.hasError) {
+                        return Center(child: Text('Error: ${snapshot.error}'));
+                      }
 
-                  if (!snapshot.hasData) {
-                    return const Center(child: CircularProgressIndicator());
-                  }
+                      if (!snapshot.hasData) {
+                        return const Center(child: CircularProgressIndicator());
+                      }
 
-                  // Display the image widget directly
-                  return snapshot.data!;
-                },
+                      // Display the image widget directly
+                      return snapshot.data!;
+                    },
+                  ),
+                ),
               ),
-            ),
+
+              // Recording indicator overlay
+              if (_isRecording)
+                Positioned(
+                  top: 16,
+                  right: 16,
+                  child: Container(
+                    padding:
+                        const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                    decoration: BoxDecoration(
+                      color: Colors.red.withOpacity(0.7),
+                      borderRadius: BorderRadius.circular(16),
+                    ),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Container(
+                          width: 10,
+                          height: 10,
+                          decoration: const BoxDecoration(
+                            color: Colors.white,
+                            shape: BoxShape.circle,
+                          ),
+                        ),
+                        const SizedBox(width: 6),
+                        Text(
+                          'REC ${formattedDuration}',
+                          style: const TextStyle(
+                            color: Colors.white,
+                            fontWeight: FontWeight.bold,
+                            fontSize: 13,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+            ],
           ),
         ),
 
@@ -1997,6 +2173,18 @@ class _CameraFeedViewState extends State<CameraFeedView> {
           ),
       ],
     );
+  }
+
+  // Format current date and time for session timestamps
+  String _getCurrentFormattedDate() {
+    final now = DateTime.now();
+    final formatter = DateFormat('MMM d, yyyy - h:mm a');
+    return formatter.format(now);
+  }
+
+  // Format duration as mm:ss for display
+  String get formattedDuration {
+    return '${_currentDuration.inMinutes.toString().padLeft(2, '0')}:${(_currentDuration.inSeconds % 60).toString().padLeft(2, '0')}';
   }
 }
 

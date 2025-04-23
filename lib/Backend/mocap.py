@@ -14,17 +14,29 @@ import cv2
 import torch
 import glob
 import sys
+
+# Add the current directory to the Python path to ensure all modules can be found
+current_dir = os.getcwd()
+script_dir = os.path.dirname(os.path.abspath(__file__))
+if script_dir not in sys.path:
+    sys.path.insert(0, script_dir)
+if current_dir not in sys.path:
+    sys.path.insert(0, current_dir)
+
 from tqdm import tqdm
-from body_keypoint_track import BodyKeypointTrack, show_annotation
-from skeleton_ik_solver import SkeletonIKSolver
+try:
+    from body_keypoint_track import BodyKeypointTrack, show_annotation
+    from skeleton_ik_solver import SkeletonIKSolver
+except ImportError:
+    # Try with full paths if modules not found
+    module_path = os.path.join(script_dir)
+    sys.path.insert(0, module_path)
+    from body_keypoint_track import BodyKeypointTrack, show_annotation
+    from skeleton_ik_solver import SkeletonIKSolver
 
 def main():
     # Print the current working directory to help with debugging
-    current_dir = os.getcwd()
     print(f"Current working directory: {current_dir}")
-    
-    # Get the directory where the script is located
-    script_dir = os.path.dirname(os.path.abspath(__file__))
     print(f"Script directory: {script_dir}")
     
     # Look for video files in both current directory and script directory
@@ -122,10 +134,104 @@ def main():
         print(f"ERROR: Skeleton directory not found at {skeleton_path}")
         print(f"Creating skeleton directory...")
         os.makedirs(skeleton_path, exist_ok=True)
-        print(f"Please ensure skeleton model files are copied to this directory before proceeding.")
-        sys.stdout.flush()
+        
+        # Look for skeleton files in python_scripts/tmp/skeleton
+        source_skeleton_dir = os.path.join(current_dir, 'python_scripts', 'tmp', 'skeleton')
+        if os.path.exists(source_skeleton_dir):
+            print(f"Copying skeleton files from {source_skeleton_dir}...")
+            skeleton_files = ['skeleton.json', 'bone_matrix_rel.npy', 'bone_matrix_world.npy']
+            for file in skeleton_files:
+                src_file = os.path.join(source_skeleton_dir, file)
+                if os.path.exists(src_file):
+                    dst_file = os.path.join(skeleton_path, file)
+                    shutil.copy2(src_file, dst_file)
+                    print(f"Copied {file} to {skeleton_path}")
+        else:
+            print(f"WARNING: No skeleton files found in {source_skeleton_dir}")
+            
+        # Check if we have skeleton files in lib/Backend/tmp/skeleton
+        backend_skeleton_dir = os.path.join(script_dir, 'tmp', 'skeleton')
+        if os.path.exists(backend_skeleton_dir):
+            print(f"Copying skeleton files from {backend_skeleton_dir}...")
+            skeleton_files = ['skeleton.json', 'bone_matrix_rel.npy', 'bone_matrix_world.npy']
+            for file in skeleton_files:
+                src_file = os.path.join(backend_skeleton_dir, file)
+                if os.path.exists(src_file):
+                    dst_file = os.path.join(skeleton_path, file)
+                    shutil.copy2(src_file, dst_file)
+                    print(f"Copied {file} to {skeleton_path}")
+        
+        # Check if we have skeleton files in lib/Backend/DuoRecord/tmp/skeleton or lib/Backend/TrioRecord/tmp/skeleton
+        other_skeleton_dirs = [
+            os.path.join(script_dir, 'DuoRecord', 'tmp', 'skeleton'),
+            os.path.join(script_dir, 'TrioRecord', 'tmp', 'skeleton')
+        ]
+        
+        for dir_path in other_skeleton_dirs:
+            if os.path.exists(dir_path):
+                print(f"Copying skeleton files from {dir_path}...")
+                skeleton_files = ['skeleton.json', 'bone_matrix_rel.npy', 'bone_matrix_world.npy']
+                for file in skeleton_files:
+                    src_file = os.path.join(dir_path, file)
+                    if os.path.exists(src_file):
+                        dst_file = os.path.join(skeleton_path, file)
+                        shutil.copy2(src_file, dst_file)
+                        print(f"Copied {file} to {skeleton_path}")
+                break
+        
+        # Check if we now have the skeleton files
+        required_files = ['skeleton.json', 'bone_matrix_rel.npy', 'bone_matrix_world.npy']
+        missing_files = [f for f in required_files if not os.path.exists(os.path.join(skeleton_path, f))]
+        
+        if missing_files:
+            print(f"ERROR: Missing skeleton files: {missing_files}")
+            print(f"Please ensure skeleton model files are copied to this directory before proceeding.")
+            sys.stdout.flush()
+        else:
+            print(f"All skeleton files are in place.")
     else:
         print(f"Found skeleton directory: {skeleton_path}")
+        
+        # Verify skeleton files exist
+        required_files = ['skeleton.json', 'bone_matrix_rel.npy', 'bone_matrix_world.npy']
+        missing_files = [f for f in required_files if not os.path.exists(os.path.join(skeleton_path, f))]
+        
+        if missing_files:
+            print(f"ERROR: Missing skeleton files: {missing_files}")
+            print(f"Attempting to copy from other locations...")
+            
+            # Try copying from python_scripts/tmp/skeleton
+            source_skeleton_dir = os.path.join(current_dir, 'python_scripts', 'tmp', 'skeleton')
+            if os.path.exists(source_skeleton_dir):
+                for file in missing_files:
+                    src_file = os.path.join(source_skeleton_dir, file)
+                    if os.path.exists(src_file):
+                        dst_file = os.path.join(skeleton_path, file)
+                        shutil.copy2(src_file, dst_file)
+                        print(f"Copied {file} to {skeleton_path}")
+            
+            # Try other locations too
+            other_dirs = [
+                os.path.join(script_dir, 'tmp', 'skeleton'),
+                os.path.join(script_dir, 'DuoRecord', 'tmp', 'skeleton'),
+                os.path.join(script_dir, 'TrioRecord', 'tmp', 'skeleton')
+            ]
+            
+            for dir_path in other_dirs:
+                if os.path.exists(dir_path):
+                    for file in missing_files:
+                        src_file = os.path.join(dir_path, file)
+                        if os.path.exists(src_file):
+                            dst_file = os.path.join(skeleton_path, file)
+                            shutil.copy2(src_file, dst_file)
+                            print(f"Copied {file} to {skeleton_path}")
+            
+            # Check if we still have missing files
+            missing_files = [f for f in required_files if not os.path.exists(os.path.join(skeleton_path, f))]
+            if missing_files:
+                print(f"ERROR: Still missing skeleton files after copying attempt: {missing_files}")
+            else:
+                print(f"All skeleton files are now in place.")
     
     # Open the video for frame-by-frame processing
     print(f"Opening video file: {video_path}")
@@ -270,6 +376,6 @@ def main():
         cv2.destroyAllWindows()
         print("Motion capture process finished.")
 
-# To Claude: Entry point when script is run directly
+# Entry point when script is run directly
 if __name__ == '__main__':
     main()

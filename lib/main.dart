@@ -13,6 +13,7 @@ import 'pages/on_boarding.dart';
 import 'dart:typed_data';
 import 'package:path/path.dart' as path;
 import 'dart:ui' as ui;
+import 'Backend/script_runner.dart';
 
 void main() {
   runApp(const AxisMocapApp());
@@ -181,6 +182,7 @@ class _MocapHomePageState extends State<MocapHomePage>
   StreamSubscription? _statusSubscription;
   StreamSubscription? _outputSubscription;
   String _lastOutput = '';
+  String _mocapOutput = '';
 
   @override
   void initState() {
@@ -259,12 +261,7 @@ class _MocapHomePageState extends State<MocapHomePage>
           date: yesterday),
     ];
 
-    for (var session in demoSessions) {
-      await session.createSessionFolder();
-    }
-
     setState(() {
-      _sessions = demoSessions;
       _filteredSessions = List.from(_sessions);
     });
   }
@@ -802,12 +799,33 @@ class _MocapHomePageState extends State<MocapHomePage>
         centerTitle: true,
         title: Text(widget.title),
         actions: [
+          IconButton(
+            icon: const Icon(Icons.science),
+            tooltip: 'Run Mocap Script',
+            onPressed: () async {
+              await _runMocapScript();
+              showDialog(
+                context: context,
+                builder: (context) => AlertDialog(
+                  title: const Text('Mocap Script Output'),
+                  content: SingleChildScrollView(
+                    child: Text(_mocapOutput),
+                  ),
+                  actions: [
+                    TextButton(
+                      onPressed: () => Navigator.of(context).pop(),
+                      child: const Text('Close'),
+                    ),
+                  ],
+                ),
+              );
+            },
+          ),
           // Profile menu
           Padding(
             padding: const EdgeInsets.only(right: 8.0),
             child: Row(
               children: [
-                // Greeting text
                 Text(
                   _getGreeting() + ", Alex",
                   style: const TextStyle(
@@ -816,7 +834,6 @@ class _MocapHomePageState extends State<MocapHomePage>
                   ),
                 ),
                 const SizedBox(width: 8),
-                // Profile picture
                 CircleAvatar(
                   radius: 18,
                   backgroundColor:
@@ -1246,6 +1263,39 @@ class _MocapHomePageState extends State<MocapHomePage>
 
                           // Add a smaller bottom padding to save space
                           const SizedBox(height: 10),
+                          // Run Mocap Script button
+                          Padding(
+                            padding: const EdgeInsets.symmetric(
+                                horizontal: 16.0, vertical: 8.0),
+                            child: ElevatedButton.icon(
+                              onPressed: () async {
+                                await _runMocapScript();
+                                showDialog(
+                                  context: context,
+                                  builder: (context) => AlertDialog(
+                                    title: const Text('Mocap Script Output'),
+                                    content: SingleChildScrollView(
+                                      child: Text(_mocapOutput),
+                                    ),
+                                    actions: [
+                                      TextButton(
+                                        onPressed: () =>
+                                            Navigator.of(context).pop(),
+                                        child: const Text('Close'),
+                                      ),
+                                    ],
+                                  ),
+                                );
+                              },
+                              icon: const Icon(Icons.science),
+                              label: const Text('Run Mocap Script'),
+                              style: ElevatedButton.styleFrom(
+                                backgroundColor:
+                                    Theme.of(context).colorScheme.primary,
+                                foregroundColor: Colors.white,
+                              ),
+                            ),
+                          ),
                         ],
                       ),
                     ),
@@ -1809,6 +1859,32 @@ class _MocapHomePageState extends State<MocapHomePage>
     final now = DateTime.now();
     final formatter = DateFormat('MMM d, yyyy - h:mm a');
     return formatter.format(now);
+  }
+
+  // Run the mocap.py Python script
+  Future<void> _runMocapScript() async {
+    setState(() {
+      _mocapOutput = 'Running mocap script...';
+    });
+    try {
+      final scriptPath =
+          path.join(Directory.current.path, 'lib/Backend/mocap.py');
+      final inputPath =
+          path.join(Directory.current.path, 'lib/Backend/Video.mp4');
+      final result =
+          await Process.run('python3', [scriptPath, '--input', inputPath]);
+      String output = result.stdout.toString().trim();
+      if (output.isEmpty && result.stderr.toString().isNotEmpty) {
+        output = 'Error: ${result.stderr}';
+      }
+      setState(() {
+        _mocapOutput = output;
+      });
+    } catch (e) {
+      setState(() {
+        _mocapOutput = 'Error: $e';
+      });
+    }
   }
 }
 

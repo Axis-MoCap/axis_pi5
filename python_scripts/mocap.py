@@ -11,12 +11,30 @@ from body_keypoint_track import BodyKeypointTrack, show_annotation
 from skeleton_ik_solver import SkeletonIKSolver
 
 def main():
-    # Check for Video.mp4 first
-    video_path = 'Video.mp4'
+    # Check for video file with case-insensitive matching
+    video_path = None
+    possible_names = ['Video.mp4', 'video.mp4', 'VIDEO.mp4']
     
-    # If Video.mp4 doesn't exist, run Tracking.py
-    if not os.path.exists(video_path):
-        print(f"'{video_path}' not found. Running Tracking.py...")
+    # Try to find any of the possible video files
+    for name in possible_names:
+        if os.path.exists(name):
+            video_path = name
+            print(f"Found video file: {name}")
+            break
+    
+    # If no video was found, try looking in the current directory
+    if video_path is None:
+        # List all files in current directory
+        files = os.listdir('.')
+        for file in files:
+            if file.lower().endswith('.mp4'):
+                video_path = file
+                print(f"Found video file: {file}")
+                break
+    
+    # If video doesn't exist, run Tracking.py
+    if video_path is None:
+        print("No video file found. Running Tracking.py...")
         tracking_script = "Tracking.py"
         if not os.path.exists(tracking_script):
             raise Exception(f"'{tracking_script}' not found in the current directory.")
@@ -25,9 +43,15 @@ def main():
         proc = subprocess.Popen(f"python {tracking_script}")
         proc.wait()
         
-        # Check again if Video.mp4 was created by the tracking script
-        if not os.path.exists(video_path):
-            raise Exception(f"'{video_path}' was not created by the tracking script.")
+        # Check again if any video was created by the tracking script
+        for name in possible_names:
+            if os.path.exists(name):
+                video_path = name
+                print(f"Video created: {name}")
+                break
+        
+        if video_path is None:
+            raise Exception("No video file was created by the tracking script.")
     
     # Path to the blender model
     blend_path = 'assets/skeleton.blend'  # Your rigged model .blend file

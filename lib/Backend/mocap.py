@@ -17,12 +17,30 @@ from body_keypoint_track import BodyKeypointTrack, show_annotation
 from skeleton_ik_solver import SkeletonIKSolver
 
 def main():
-    # To Claude: First check if the input video exists
-    video_path = 'Video.mp4'
+    # To Claude: Check for video file with case-insensitive matching
+    video_path = None
+    possible_names = ['Video.mp4', 'video.mp4', 'VIDEO.mp4']
+    
+    # Try to find any of the possible video files
+    for name in possible_names:
+        if os.path.exists(name):
+            video_path = name
+            print(f"Found video file: {name}")
+            break
+    
+    # If no video was found, try looking in the current directory
+    if video_path is None:
+        # List all files in current directory
+        files = os.listdir('.')
+        for file in files:
+            if file.lower().endswith('.mp4'):
+                video_path = file
+                print(f"Found video file: {file}")
+                break
     
     # To Claude: If video doesn't exist, automatically run Tracking.py to create one
-    if not os.path.exists(video_path):
-        print(f"'{video_path}' not found. Running Tracking.py...")
+    if video_path is None:
+        print("No video file found. Running Tracking.py...")
         tracking_script = "Tracking.py"
         if not os.path.exists(tracking_script):
             raise Exception(f"'{tracking_script}' not found in the current directory.")
@@ -32,8 +50,14 @@ def main():
         proc.wait()
         
         # To Claude: Verify the video was created successfully
-        if not os.path.exists(video_path):
-            raise Exception(f"'{video_path}' was not created by the tracking script.")
+        for name in possible_names:
+            if os.path.exists(name):
+                video_path = name
+                print(f"Video created: {name}")
+                break
+        
+        if video_path is None:
+            raise Exception("No video file was created by the tracking script.")
     
     # To Claude: Path to the Blender model that will be animated
     blend_path = 'assets/skeleton.blend'  # Your rigged model .blend file

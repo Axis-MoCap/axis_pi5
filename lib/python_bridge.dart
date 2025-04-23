@@ -159,21 +159,14 @@ class PythonBridge {
         _outputControllers[id] = StreamController<String>.broadcast();
       }
 
-      // Handle absolute paths in scriptName
-      String fullScriptPath;
-      if (scriptName.startsWith('lib/')) {
-        // This is an absolute path from the project root
-        fullScriptPath = scriptName;
-      } else {
-        // This is a relative path to the scripts directory
-        fullScriptPath = path.join(_scriptsPath, scriptName);
-      }
+      // Build the command and arguments
+      final scriptPath = path.join(_scriptsPath, scriptName);
 
       // Make sure the script exists
-      final scriptFile = File(fullScriptPath);
+      final scriptFile = File(scriptPath);
       if (!await scriptFile.exists()) {
-        final error = 'ERROR: Script not found: $fullScriptPath';
-        debugPrint('### PYTHON ERROR: $error ###');
+        final error = 'ERROR: Script not found: $scriptPath';
+        debugPrint(error);
 
         if (captureOutput) {
           _outputControllers[id]?.add(error);
@@ -189,31 +182,30 @@ class PythonBridge {
 
       if (Platform.isWindows) {
         command = 'python';
-        commandArgs = [fullScriptPath, ...args];
+        commandArgs = [scriptPath, ...args];
       } else {
         // On Unix platforms, try to run the script directly if it's executable
         try {
           // Make the script executable
-          await Process.run('chmod', ['+x', fullScriptPath]);
+          await Process.run('chmod', ['+x', scriptPath]);
 
-          command = fullScriptPath;
+          command = scriptPath;
           commandArgs = args;
         } catch (e) {
           // If making the script executable fails, fall back to python3
-          debugPrint(
-              '### PYTHON WARNING: Failed to make script executable: $e, falling back to python3 ###');
+          debugPrint('WARNING: Failed to make script executable: $e');
           command = 'python3';
-          commandArgs = [fullScriptPath, ...args];
+          commandArgs = [scriptPath, ...args];
         }
       }
 
-      debugPrint('### PYTHON: Running: $command ${commandArgs.join(' ')} ###');
+      debugPrint('Running: $command ${commandArgs.join(' ')}');
 
       // Start the process
       final process = await Process.start(
         command,
         commandArgs,
-        workingDirectory: path.dirname(fullScriptPath),
+        workingDirectory: _scriptsPath,
         includeParentEnvironment: true,
       );
       _activeProcesses[id] = process;
@@ -223,30 +215,19 @@ class PythonBridge {
         // Handle stdout
         process.stdout.transform(const SystemEncoding().decoder).listen((data) {
           _outputControllers[id]?.add(data);
-          // Only print important messages to reduce noise
-          if (data.contains('Error') ||
-              data.contains('Recording') ||
-              data.contains('Processing') ||
-              data.contains('STATUS:')) {
-            debugPrint('### PYTHON [$id]: $data ###');
-          }
+          debugPrint('[$id] stdout: $data');
         });
 
         // Handle stderr
         process.stderr.transform(const SystemEncoding().decoder).listen((data) {
           _outputControllers[id]?.add('ERROR: $data');
-          // Only print real errors, not noise
-          if (data.trim().isNotEmpty &&
-              !data.contains('WARNING:') &&
-              !data.contains('DEBUG:')) {
-            debugPrint('### PYTHON ERROR [$id]: $data ###');
-          }
+          debugPrint('[$id] stderr: $data');
         });
       }
 
       // Handle process exit
       process.exitCode.then((exitCode) {
-        debugPrint('### PYTHON [$id]: Process exited with code $exitCode ###');
+        debugPrint('[$id] process exited with code $exitCode');
         _activeProcesses.remove(id);
 
         if (captureOutput) {
@@ -259,7 +240,7 @@ class PythonBridge {
 
       return captureOutput ? _outputControllers[id]?.stream : null;
     } catch (e) {
-      debugPrint('### PYTHON ERROR: Failed to run Python script: $e ###');
+      debugPrint('Error running Python script: $e');
       return null;
     }
   }

@@ -36,8 +36,6 @@ class RecordingService {
 
   // Recording parameters
   String? _sessionName;
-  String? _videoPath;
-  String? _processedFilePath;
   StreamSubscription? _recordingSubscription;
 
   // Start recording function
@@ -52,31 +50,22 @@ class RecordingService {
 
     try {
       _sessionName = sessionName;
-      _videoPath = null;
-      _processedFilePath = null;
 
       // Update status
       _setStatus(RecordingStatus.initializing);
 
-      // Build arguments list for the camera_controller.py script
+      // Build arguments list from parameters
       final args = <String>[];
-
-      // Add session name
       args.add('--session=$sessionName');
-
-      // Use the mocap.py script in the Backend folder
-      args.add('--python_script=lib/Backend/mocap.py');
 
       // Add any additional parameters
       params.forEach((key, value) {
         args.add('--$key=$value');
       });
 
-      debugPrint('### RECORDING: Starting recording with args: $args ###');
-
-      // Try to directly use the camera_controller.py script from lib/Backend
+      // Call the recording Python script
       final outputStream = await _pythonBridge.runPythonScript(
-        scriptName: 'lib/Backend/camera_controller.py',
+        scriptName: 'record.py',
         args: args,
         processId: 'recording',
       );
@@ -210,15 +199,6 @@ class RecordingService {
       debugPrint('Error getting sessions: $e');
       return [];
     }
-  }
-
-  // Get information about the latest recording
-  Map<String, String?> getLatestRecordingInfo() {
-    return {
-      'videoPath': _videoPath,
-      'processedPath': _processedFilePath,
-      'sessionName': _sessionName,
-    };
   }
 
   // Dispose method

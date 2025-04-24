@@ -1132,16 +1132,7 @@ class _MocapHomePageState extends State<MocapHomePage>
 
                               // Run YOLO Model button
                               ElevatedButton.icon(
-                                onPressed: () {
-                                  // Show a dialog that YOLO model is running
-                                  ScaffoldMessenger.of(context).showSnackBar(
-                                    const SnackBar(
-                                      content: Text(
-                                          'Running YOLO object detection model...'),
-                                      duration: Duration(seconds: 2),
-                                    ),
-                                  );
-                                },
+                                onPressed: _runYoloModel,
                                 icon: const Icon(Icons.visibility, size: 20),
                                 label: const Text('Run YOLO Model'),
                                 style: ElevatedButton.styleFrom(
@@ -1907,12 +1898,80 @@ class _MocapHomePageState extends State<MocapHomePage>
         debugPrint('rpicam-vid stdout: ${result.stdout}');
         debugPrint('rpicam-vid stderr: ${result.stderr}');
       }).catchError((e) {
-        debugPrint('Error running rpicam-vid: $e');
+        debugPrint('Error running rpicam-vid: ${e}');
       });
     } catch (e) {
-      debugPrint('Error starting rpicam-vid: $e');
+      debugPrint('Error starting rpicam-vid: ${e}');
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text('Error: $e')),
+      );
+    }
+  }
+
+  // Run YOLO object detection model
+  Future<void> _runYoloModel() async {
+    try {
+      // Display a SnackBar that the model is running
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Running YOLO object detection model...'),
+          duration: Duration(seconds: 2),
+        ),
+      );
+
+      // Run the YOLO pose detection Python script
+      final scriptPath =
+          path.join(Directory.current.path, 'lib/Backend/pose demo.py');
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Starting YOLO model...')),
+      );
+
+      try {
+        final result = await Process.run('python3', [scriptPath]);
+
+        // Check results
+        if (result.exitCode != 0) {
+          debugPrint('YOLO script error: ${result.stderr}');
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+                content: Text('Error running YOLO model: ${result.stderr}')),
+          );
+          return;
+        }
+
+        // Extract information from the result
+        final output = result.stdout.toString().trim();
+        debugPrint('YOLO script output: $output');
+      } catch (e) {
+        debugPrint('Error executing YOLO script: $e');
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Error executing YOLO script: $e')),
+        );
+        return;
+      }
+
+      // Show a dialog with the (mock) results
+      showDialog(
+        context: context,
+        builder: (context) => AlertDialog(
+          title: const Text('YOLO Detection Results'),
+          content: const SingleChildScrollView(
+            child: Text(
+                'YOLO pose detection completed successfully. Check the camera feed for results.'),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(),
+              child: const Text('Close'),
+            ),
+          ],
+        ),
+      );
+    } catch (e) {
+      debugPrint('Error running YOLO model: $e');
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Error running YOLO model: $e')),
       );
     }
   }
@@ -2052,34 +2111,6 @@ class _CameraFeedViewState extends State<CameraFeedView> {
                 },
               ),
             ),
-          ),
-        ),
-
-        // Controls
-        Padding(
-          padding: const EdgeInsets.only(top: 16.0, bottom: 16.0),
-          child: Row(
-            mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-            children: [
-              // Record Button
-              ElevatedButton.icon(
-                onPressed: _toggleRecording,
-                icon:
-                    Icon(_isRecording ? Icons.stop : Icons.fiber_manual_record),
-                label: Text(_isRecording ? 'Stop' : 'Record'),
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: _isRecording ? Colors.red : Colors.green,
-                  foregroundColor: Colors.white,
-                ),
-              ),
-
-              // Retry Button
-              ElevatedButton.icon(
-                onPressed: _initializeCamera,
-                icon: const Icon(Icons.refresh),
-                label: const Text('Retry'),
-              ),
-            ],
           ),
         ),
 

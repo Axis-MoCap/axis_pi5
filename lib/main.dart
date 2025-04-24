@@ -1874,22 +1874,28 @@ class _MocapHomePageState extends State<MocapHomePage>
 
   Future<void> _recordVideo() async {
     try {
+      // Create output path to save exactly where mocap.py will look for it
+      final outputPath =
+          path.join(Directory.current.path, 'lib/Backend/Video.mp4');
+
       // Start the rpicam-vid command without awaiting
       final processFuture = Process.run(
         'rpicam-vid',
-        ['-t', '10s', '-o', 'test.mp4'],
+        ['-t', '10s', '-o', outputPath],
         runInShell: true,
       );
 
       // Notify that the command has been executed
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Command executed')),
+        SnackBar(content: Text('Recording video to $outputPath')),
       );
 
       // Schedule a notification for when the command is expected to finish
       Timer(const Duration(seconds: 11), () {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Command finished running')),
+          SnackBar(
+              content: Text(
+                  'Video saved to $outputPath - ready for mocap processing')),
         );
       });
 
@@ -1897,6 +1903,14 @@ class _MocapHomePageState extends State<MocapHomePage>
       processFuture.then((result) {
         debugPrint('rpicam-vid stdout: ${result.stdout}');
         debugPrint('rpicam-vid stderr: ${result.stderr}');
+
+        // Verify the file exists
+        final file = File(outputPath);
+        if (file.existsSync()) {
+          debugPrint('Video file successfully saved to $outputPath');
+        } else {
+          debugPrint('ERROR: Video file not found at $outputPath');
+        }
       }).catchError((e) {
         debugPrint('Error running rpicam-vid: ${e}');
       });

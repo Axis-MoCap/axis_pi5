@@ -1085,40 +1085,70 @@ class _MocapHomePageState extends State<MocapHomePage>
                           Row(
                             mainAxisAlignment: MainAxisAlignment.spaceEvenly,
                             children: [
+                              // Run Mocap Script button
                               ElevatedButton.icon(
-                                onPressed: () {},
-                                icon: const Icon(Icons.refresh, size: 18),
-                                label: const Text('Reset'),
+                                onPressed: () async {
+                                  await _runMocapScript();
+                                  showDialog(
+                                    context: context,
+                                    builder: (context) => AlertDialog(
+                                      title: const Text('Mocap Script Output'),
+                                      content: SingleChildScrollView(
+                                        child: Text(_mocapOutput),
+                                      ),
+                                      actions: [
+                                        TextButton(
+                                          onPressed: () =>
+                                              Navigator.of(context).pop(),
+                                          child: const Text('Close'),
+                                        ),
+                                      ],
+                                    ),
+                                  );
+                                },
+                                icon: const Icon(Icons.science, size: 20),
+                                label: const Text('Run Mocap Script'),
                                 style: ElevatedButton.styleFrom(
                                   foregroundColor: Colors.white,
-                                  backgroundColor: Colors.blueGrey.shade700,
+                                  backgroundColor:
+                                      Theme.of(context).colorScheme.primary,
                                   padding: const EdgeInsets.symmetric(
-                                      horizontal: 12, vertical: 8),
+                                      horizontal: 12, vertical: 10),
                                 ),
                               ),
-                              FloatingActionButton(
-                                onPressed: _toggleRecording,
-                                backgroundColor: _isRecording
-                                    ? Colors.red
-                                    : Theme.of(context).colorScheme.primary,
-                                tooltip: _isRecording
-                                    ? 'Stop capturing'
-                                    : 'Start capturing',
-                                child: Icon(
-                                    _isRecording
-                                        ? Icons.stop
-                                        : Icons.play_arrow,
-                                    size: 24),
-                              ),
+
+                              // Record Video button
                               ElevatedButton.icon(
-                                onPressed: () {},
-                                icon: const Icon(Icons.save, size: 18),
-                                label: const Text('Save'),
+                                onPressed: _recordVideo,
+                                icon: const Icon(Icons.videocam, size: 20),
+                                label: const Text('Record Video'),
                                 style: ElevatedButton.styleFrom(
                                   foregroundColor: Colors.white,
-                                  backgroundColor: Colors.blueGrey.shade700,
+                                  backgroundColor: Colors.red.shade600,
                                   padding: const EdgeInsets.symmetric(
-                                      horizontal: 12, vertical: 8),
+                                      horizontal: 12, vertical: 10),
+                                ),
+                              ),
+
+                              // Run YOLO Model button
+                              ElevatedButton.icon(
+                                onPressed: () {
+                                  // Show a dialog that YOLO model is running
+                                  ScaffoldMessenger.of(context).showSnackBar(
+                                    const SnackBar(
+                                      content: Text(
+                                          'Running YOLO object detection model...'),
+                                      duration: Duration(seconds: 2),
+                                    ),
+                                  );
+                                },
+                                icon: const Icon(Icons.visibility, size: 20),
+                                label: const Text('Run YOLO Model'),
+                                style: ElevatedButton.styleFrom(
+                                  foregroundColor: Colors.white,
+                                  backgroundColor: Colors.green.shade600,
+                                  padding: const EdgeInsets.symmetric(
+                                      horizontal: 12, vertical: 10),
                                 ),
                               ),
                             ],
@@ -1258,52 +1288,6 @@ class _MocapHomePageState extends State<MocapHomePage>
                                   ),
                                 ],
                               ),
-                            ),
-                          ),
-
-                          // Add a smaller bottom padding to save space
-                          const SizedBox(height: 10),
-                          // Run Mocap Script button
-                          Padding(
-                            padding: const EdgeInsets.symmetric(
-                                horizontal: 16.0, vertical: 8.0),
-                            child: ElevatedButton.icon(
-                              onPressed: () async {
-                                await _runMocapScript();
-                                showDialog(
-                                  context: context,
-                                  builder: (context) => AlertDialog(
-                                    title: const Text('Mocap Script Output'),
-                                    content: SingleChildScrollView(
-                                      child: Text(_mocapOutput),
-                                    ),
-                                    actions: [
-                                      TextButton(
-                                        onPressed: () =>
-                                            Navigator.of(context).pop(),
-                                        child: const Text('Close'),
-                                      ),
-                                    ],
-                                  ),
-                                );
-                              },
-                              icon: const Icon(Icons.science),
-                              label: const Text('Run Mocap Script'),
-                              style: ElevatedButton.styleFrom(
-                                backgroundColor:
-                                    Theme.of(context).colorScheme.primary,
-                                foregroundColor: Colors.white,
-                              ),
-                            ),
-                          ),
-                          // Record Video button
-                          Padding(
-                            padding: const EdgeInsets.symmetric(
-                                horizontal: 16.0, vertical: 8.0),
-                            child: ElevatedButton.icon(
-                              onPressed: _recordVideo,
-                              icon: const Icon(Icons.videocam),
-                              label: const Text('Record video'),
                             ),
                           ),
                         ],

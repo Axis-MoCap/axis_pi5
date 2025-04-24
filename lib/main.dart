@@ -2046,12 +2046,6 @@ class _MocapHomePageState extends State<MocapHomePage>
         await directory.create(recursive: true);
       }
 
-      // Delete existing file if it exists
-      final existingFile = File(outputPath);
-      if (await existingFile.exists()) {
-        await existingFile.delete();
-      }
-
       // Start the rpicam-vid command without awaiting
       final processFuture = Process.run(
         'rpicam-vid',

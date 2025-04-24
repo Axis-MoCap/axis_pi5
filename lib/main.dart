@@ -1846,6 +1846,97 @@ class _MocapHomePageState extends State<MocapHomePage>
     return formatter.format(now);
   }
 
+  // Add function to calculate video duration
+  Future<Duration?> _getVideoDuration(String videoPath) async {
+    try {
+      final file = File(videoPath);
+      if (!await file.exists()) {
+        debugPrint('Error: Video file does not exist at $videoPath');
+        return null;
+      }
+
+      // For a proper implementation, you would use a video analysis package
+      // Here we'll use the modified date and creation date to estimate duration
+      // This is a fallback approach - in a real app you'd use something like
+      // video_player or ffmpeg to get the actual duration
+      final stat = await file.stat();
+      final fileSize = stat.size;
+
+      // Rough estimation based on file size (assuming ~10MB per minute of video at moderate quality)
+      // This is just a placeholder - replace with actual video duration calculation
+      final estimatedSeconds = fileSize / (1024 * 1024) * 6;
+      return Duration(
+          seconds: estimatedSeconds.round().clamp(1, 600)); // Cap at 10 minutes
+    } catch (e) {
+      debugPrint('Error getting video duration: $e');
+      return null;
+    }
+  }
+
+  // Add a saved mocap session after processing completes
+  Future<MocapSession?> _addMocapSession(
+      String videoPath, String pklPath) async {
+    try {
+      // Create a date stamp
+      final now = DateTime.now();
+      final dateFormat = DateFormat('MMM d, yyyy - h:mm a');
+      final dateStamp = dateFormat.format(now);
+
+      // Generate a session name based on date
+      final sessionName = 'Mocap_${DateFormat('MMddyy_HHmm').format(now)}';
+
+      // Get video duration
+      final duration =
+          await _getVideoDuration(videoPath) ?? const Duration(seconds: 10);
+
+      // Create the session
+      final session = MocapSession(
+        name: sessionName,
+        recordingDuration: duration,
+        date: dateStamp,
+        hasPklFile: true,
+        hasRawVideo: true,
+      );
+
+      // Create session folder
+      await session.createSessionFolder();
+
+      if (session.folderPath != null) {
+        // Copy video file to session folder
+        final videoFile = File(videoPath);
+        if (await videoFile.exists()) {
+          final sessionVideoPath = '${session.folderPath}/${session.name}.mp4';
+          await videoFile.copy(sessionVideoPath);
+          debugPrint('Copied video to session folder: $sessionVideoPath');
+        }
+
+        // Copy PKL file to session folder if it exists
+        final pklFile = File(pklPath);
+        if (await pklFile.exists()) {
+          final sessionPklPath = '${session.folderPath}/${session.name}.pkl';
+          await pklFile.copy(sessionPklPath);
+          debugPrint('Copied PKL file to session folder: $sessionPklPath');
+        } else {
+          debugPrint('PKL file not found at $pklPath');
+          session.hasPklFile = false;
+        }
+
+        // Add to sessions list
+        setState(() {
+          _sessions.insert(0, session);
+          _filterSessions();
+        });
+
+        return session;
+      }
+
+      return null;
+    } catch (e) {
+      debugPrint('Error adding mocap session: $e');
+      return null;
+    }
+  }
+
   // Run the mocap.py Python script
   Future<void> _runMocapScript() async {
     setState(() {
@@ -1856,19 +1947,89 @@ class _MocapHomePageState extends State<MocapHomePage>
           path.join(Directory.current.path, 'lib/Backend/mocap.py');
       final inputPath =
           path.join(Directory.current.path, 'lib/Backend/Video.mp4');
+      final outputPklPath =
+          path.join(Directory.current.path, 'lib/Backend/motiondat.pkl');
+
+      // Show processing notification
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Processing motion capture data...'),
+          duration: Duration(seconds: 3),
+        ),
+      );
+
       final result =
           await Process.run('python3', [scriptPath, '--input', inputPath]);
       String output = result.stdout.toString().trim();
       if (output.isEmpty && result.stderr.toString().isNotEmpty) {
         output = 'Error: ${result.stderr}';
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+              content: Text('Error processing motion data: ${result.stderr}')),
+        );
       }
       setState(() {
         _mocapOutput = output;
       });
+
+      // Check if processing was successful by looking for the output file
+      final pklFile = File(outputPklPath);
+      final videoFile = File(inputPath);
+
+      if (await videoFile.exists()) {
+        if (await pklFile.exists() ||
+            output.contains('Processing completed') ||
+            result.exitCode == 0) {
+          // Processing likely successful - add session
+          final session = await _addMocapSession(inputPath, outputPklPath);
+
+          if (session != null) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(
+                content: Text(
+                    'Motion capture processed and saved as "${session.name}"'),
+                backgroundColor: Colors.green,
+              ),
+            );
+
+            // Switch to sessions tab to show the new session
+            _tabController.animateTo(1);
+          } else {
+            ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(
+                content: Text(
+                    'Motion data processed but session could not be saved'),
+                backgroundColor: Colors.orange,
+              ),
+            );
+          }
+        } else {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text(
+                  'Processing completed but no motion data file was generated'),
+              backgroundColor: Colors.orange,
+            ),
+          );
+        }
+      } else {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Video file not found at $inputPath'),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
     } catch (e) {
       setState(() {
         _mocapOutput = 'Error: $e';
       });
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Error running mocap script: $e'),
+          backgroundColor: Colors.red,
+        ),
+      );
     }
   }
 
@@ -1877,6 +2038,18 @@ class _MocapHomePageState extends State<MocapHomePage>
       // Create output path to save exactly where mocap.py will look for it
       final outputPath =
           path.join(Directory.current.path, 'lib/Backend/Video.mp4');
+
+      // Create directory if it doesn't exist
+      final directory = Directory(path.dirname(outputPath));
+      if (!await directory.exists()) {
+        await directory.create(recursive: true);
+      }
+
+      // Delete existing file if it exists
+      final existingFile = File(outputPath);
+      if (await existingFile.exists()) {
+        await existingFile.delete();
+      }
 
       // Start the rpicam-vid command without awaiting
       final processFuture = Process.run(
@@ -1894,8 +2067,15 @@ class _MocapHomePageState extends State<MocapHomePage>
       Timer(const Duration(seconds: 11), () {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-              content: Text(
-                  'Video saved to $outputPath - ready for mocap processing')),
+            content:
+                Text('Video saved to $outputPath - ready for mocap processing'),
+            action: SnackBarAction(
+              label: 'Process Now',
+              onPressed: () {
+                _runMocapScript();
+              },
+            ),
+          ),
         );
       });
 
@@ -1910,6 +2090,12 @@ class _MocapHomePageState extends State<MocapHomePage>
           debugPrint('Video file successfully saved to $outputPath');
         } else {
           debugPrint('ERROR: Video file not found at $outputPath');
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('ERROR: Video file was not created properly'),
+              backgroundColor: Colors.red,
+            ),
+          );
         }
       }).catchError((e) {
         debugPrint('Error running rpicam-vid: ${e}');

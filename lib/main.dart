@@ -1296,6 +1296,16 @@ class _MocapHomePageState extends State<MocapHomePage>
                               ),
                             ),
                           ),
+                          // Record Video button
+                          Padding(
+                            padding: const EdgeInsets.symmetric(
+                                horizontal: 16.0, vertical: 8.0),
+                            child: ElevatedButton.icon(
+                              onPressed: _recordVideo,
+                              icon: const Icon(Icons.videocam),
+                              label: const Text('Record video'),
+                            ),
+                          ),
                         ],
                       ),
                     ),
@@ -1884,6 +1894,42 @@ class _MocapHomePageState extends State<MocapHomePage>
       setState(() {
         _mocapOutput = 'Error: $e';
       });
+    }
+  }
+
+  Future<void> _recordVideo() async {
+    try {
+      // Start the rpicam-vid command without awaiting
+      final processFuture = Process.run(
+        'rpicam-vid',
+        ['-t', '10s', '-o', 'test.mp4'],
+        runInShell: true,
+      );
+
+      // Notify that the command has been executed
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Command executed')),
+      );
+
+      // Schedule a notification for when the command is expected to finish
+      Timer(const Duration(seconds: 11), () {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Command finished running')),
+        );
+      });
+
+      // Log outputs when the process completes
+      processFuture.then((result) {
+        debugPrint('rpicam-vid stdout: ${result.stdout}');
+        debugPrint('rpicam-vid stderr: ${result.stderr}');
+      }).catchError((e) {
+        debugPrint('Error running rpicam-vid: $e');
+      });
+    } catch (e) {
+      debugPrint('Error starting rpicam-vid: $e');
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Error: $e')),
+      );
     }
   }
 }

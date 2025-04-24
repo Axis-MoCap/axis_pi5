@@ -14,6 +14,7 @@ import 'dart:typed_data';
 import 'package:path/path.dart' as path;
 import 'dart:ui' as ui;
 import 'Backend/script_runner.dart';
+import 'dart:convert';
 
 void main() {
   runApp(const AxisMocapApp());
@@ -2111,6 +2112,10 @@ class _MocapHomePageState extends State<MocapHomePage>
   // Run YOLO object detection model
   Future<void> _runYoloModel() async {
     try {
+      setState(() {
+        // Use loading indicator if needed
+      });
+
       // Display a SnackBar that the model is running
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
@@ -2119,144 +2124,175 @@ class _MocapHomePageState extends State<MocapHomePage>
         ),
       );
 
-      // First, ensure any existing camera usage is stopped to prevent conflicts
-      try {
-        // Stop camera streams from CameraFeedView
-        if (_cameraService.isCameraInitialized) {
-          await _cameraService.stopCameraStream();
-          debugPrint(
-              'Stopped existing camera stream before running YOLO model');
-        }
-      } catch (e) {
-        debugPrint('Warning: Could not properly release camera: $e');
+      // 1. First, stop any camera streams if initialized to free the camera resource
+      if (_cameraService.isCameraInitialized) {
+        await _cameraService.stopCameraStream();
+        debugPrint('Stopped camera stream before running YOLO model');
       }
 
-      // Add a short delay to ensure camera resources are fully released
+      // 2. Add a delay to make sure camera resources are freed
       await Future.delayed(const Duration(milliseconds: 500));
 
-      // Run the YOLO pose detection Python script
+      // 3. Force kill any Python processes that might be using the camera
+      final killResult = await Process.run('pkill', ['-f', 'python.*picamera']);
+      debugPrint('Camera process kill result: ${killResult.exitCode}');
+
+      // 4. Check if we have a prerecorded video file
+      final videoFile = File('${Directory.current.path}/lib/Backend/Video.mp4');
+      bool videoExists = await videoFile.exists();
+      debugPrint('Video file exists: $videoExists at ${videoFile.path}');
+
+      // 5. Build the argument list based on whether we have a video file
       final scriptPath =
           path.join(Directory.current.path, 'lib/Backend/pose demo.py');
+      List<String> args = [scriptPath];
+      if (videoExists) {
+        args.add('--video');
+        args.add(videoFile.path);
+      }
+      args.add('--retry');
+      args.add('5');
+      args.add('--debug');
 
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Starting YOLO model...')),
+      // 6. Add an output file for results
+      final outputFile = '${Directory.current.path}/lib/Backend/results.json';
+      args.add('--output');
+      args.add(outputFile);
+
+      debugPrint('Running YOLO with args: $args');
+
+      // Set a timeout in case script hangs
+      final result = await Process.run('python3', args).timeout(
+        const Duration(seconds: 30),
+        onTimeout: () {
+          debugPrint('YOLO script timed out after 30 seconds');
+          return Process.runSync('echo', ['timeout']);
+        },
       );
 
-      try {
-        // Run the script with a timeout to ensure it doesn't hang
-        final result = await Process.run('python3', [scriptPath])
-            .timeout(const Duration(seconds: 30), onTimeout: () {
-          throw TimeoutException(
-              'YOLO script execution timed out after 30 seconds');
-        });
-
-        // Check results
-        if (result.exitCode != 0) {
-          debugPrint(
-              'YOLO script error (exit code ${result.exitCode}): ${result.stderr}');
-
-          // Look for specific camera busy error messages
-          final errorText = result.stderr.toString().toLowerCase();
-          if (errorText.contains('busy') || errorText.contains('camera')) {
-            ScaffoldMessenger.of(context).showSnackBar(
-              const SnackBar(
-                content: Text(
-                    'Camera is busy or not available. Please wait a moment and try again.'),
-                backgroundColor: Colors.red,
-                duration: Duration(seconds: 5),
-              ),
-            );
-          } else {
-            ScaffoldMessenger.of(context).showSnackBar(
-              SnackBar(
-                content: Text('Error running YOLO model: ${result.stderr}'),
-                backgroundColor: Colors.red,
-              ),
-            );
-          }
-          return;
-        }
-
-        // Extract information from the result
-        final output = result.stdout.toString().trim();
-        debugPrint('YOLO script output: $output');
-      } catch (e) {
-        debugPrint('Error executing YOLO script: $e');
-
-        // Provide helpful error message based on exception type
-        String errorMessage = 'Error executing YOLO script';
-
-        if (e is SocketException) {
-          errorMessage = 'Camera connection error. Try restarting the app.';
-        } else if (e is TimeoutException) {
-          errorMessage = 'YOLO model took too long to respond. Try again.';
-        } else if (e.toString().toLowerCase().contains('camera')) {
-          errorMessage =
-              'Camera access error. Make sure no other apps are using the camera.';
-        }
-
+      // Check result
+      if (result.stdout.contains('timeout')) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text(errorMessage),
-            backgroundColor: Colors.red,
-            duration: const Duration(seconds: 5),
+          const SnackBar(
+            content: Text('YOLO model timed out. Camera may be busy.'),
+            backgroundColor: Colors.orange,
           ),
         );
-        return;
-      }
-
-      // Show a dialog with the results
-      showDialog(
-        context: context,
-        builder: (context) => AlertDialog(
-          title: const Text('YOLO Detection Results'),
-          content: const SingleChildScrollView(
-            child: Text(
-                'YOLO pose detection completed successfully. Check the camera feed for results.'),
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.of(context).pop(),
-              child: const Text('Close'),
+        debugPrint('YOLO execution timed out');
+      } else if (result.exitCode != 0) {
+        // Check for camera busy error message
+        if (result.stderr.toString().contains('Camera is busy') ||
+            result.stderr.toString().contains('Failed to setup camera')) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content:
+                  Text('Camera is currently busy. Try again in a few moments.'),
+              backgroundColor: Colors.red,
             ),
-            TextButton(
-              onPressed: () {
-                Navigator.of(context).pop();
-                // Reinitialize camera for normal viewing after closing dialog
-                if (_cameraService.cameraType != CameraType.none) {
-                  _cameraService.startCameraStream();
-                  debugPrint('Restarted camera stream after YOLO model');
-                }
-              },
-              child: const Text('Close & Restart Camera'),
+          );
+        } else {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text('Error running YOLO model: ${result.exitCode}'),
+              backgroundColor: Colors.red,
             ),
-          ],
-        ),
-      );
-
-      // Set a timer to automatically restart camera after a while if user doesn't close dialog
-      Timer(const Duration(seconds: 30), () {
-        if (_cameraService.cameraType != CameraType.none &&
-            !_cameraService.isCameraInitialized) {
-          _cameraService.startCameraStream();
-          debugPrint('Auto-restarted camera stream after YOLO model timeout');
+          );
         }
-      });
-    } catch (e) {
-      debugPrint('Error running YOLO model: $e');
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('Error running YOLO model: $e'),
-          backgroundColor: Colors.red,
-          duration: const Duration(seconds: 5),
-        ),
-      );
+        debugPrint('YOLO error: ${result.stderr}');
+      } else {
+        // Successfully ran YOLO - check if we have results
+        try {
+          File resultFile = File(outputFile);
+          if (await resultFile.exists()) {
+            final resultContent = await resultFile.readAsString();
+            final results = jsonDecode(resultContent);
 
-      // Attempt to restart camera stream in case of failure
-      if (_cameraService.cameraType != CameraType.none) {
-        await Future.delayed(const Duration(seconds: 1));
+            // Show dialog with results
+            if (!mounted) return;
+
+            showDialog(
+              context: context,
+              builder: (context) => AlertDialog(
+                title: const Text('YOLO Detection Results'),
+                content: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text('Source: ${results['source']}'),
+                    Text('Frames processed: ${results['frames_processed']}'),
+                    Text('Success: ${results['success']}'),
+                  ],
+                ),
+                actions: [
+                  TextButton(
+                    onPressed: () {
+                      Navigator.of(context).pop();
+                      // Restart camera after closing dialog
+                      if (_cameraService.cameraType != CameraType.none) {
+                        _cameraService.startCameraStream();
+                      }
+                    },
+                    child: const Text('OK'),
+                  ),
+                ],
+              ),
+            );
+
+            // Set timer to restart camera if user doesn't close dialog
+            Timer(const Duration(seconds: 10), () {
+              if (!_cameraService.isCameraInitialized && mounted) {
+                _cameraService.startCameraStream();
+                debugPrint('Auto-restarted camera after 10 seconds');
+              }
+            });
+          } else {
+            // No results file found
+            ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(
+                content: Text('YOLO model ran but no results were saved.'),
+                backgroundColor: Colors.orange,
+              ),
+            );
+
+            // Restart the camera since there's no dialog
+            if (_cameraService.cameraType != CameraType.none) {
+              _cameraService.startCameraStream();
+            }
+          }
+        } catch (e) {
+          debugPrint('Error parsing YOLO results: $e');
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text('YOLO model ran but results could not be read: $e'),
+              backgroundColor: Colors.orange,
+            ),
+          );
+
+          // Restart the camera since there was an error
+          if (_cameraService.cameraType != CameraType.none) {
+            _cameraService.startCameraStream();
+          }
+        }
+
+        debugPrint('YOLO output: ${result.stdout}');
+      }
+    } catch (e) {
+      debugPrint('Exception in _runYoloModel: $e');
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Error: $e'),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
+    } finally {
+      // Attempt to restart the camera if not already running
+      if (mounted &&
+          !_cameraService.isCameraInitialized &&
+          _cameraService.cameraType != CameraType.none) {
         _cameraService.startCameraStream();
-        debugPrint('Attempted to restart camera after YOLO model error');
+        debugPrint('Restarted camera stream in finally block');
       }
     }
   }
